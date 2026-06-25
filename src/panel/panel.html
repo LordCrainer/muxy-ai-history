@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="./icon.svg" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>AI History</title>
+</head>
+<body>
+  <main class="wrap">
+    <header class="header">
+      <div class="title">
+        <span class="spark">⏱</span>
+        <span>AI History</span>
+      </div>
+      <button id="refresh" class="icon-button" type="button" aria-label="Refresh">↻</button>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-provider="all" role="tab">All</button>
+      <button class="tab" data-provider="claude" role="tab">Claude</button>
+      <button class="tab" data-provider="opencode" role="tab">OpenCode</button>
+    </div>
+
+    <div class="filters">
+      <select id="project-filter" class="project-filter" aria-label="Filter by project">
+        <option value="">All projects</option>
+      </select>
+      <input id="search" type="search" placeholder="Search conversations..." />
+    </div>
+
+    <div id="status" class="status">Loading...</div>
+    <div id="conversations" class="conversations"></div>
+    <div id="load-more-wrap" class="load-more-wrap hidden">
+      <button id="load-more" class="load-more" type="button">Load more</button>
+    </div>
+    <div id="detail" class="detail hidden">
+      <div class="detail-header">
+        <button id="back" class="icon-button" type="button" aria-label="Back">←</button>
+        <div class="detail-title">
+          <div id="detail-title" class="detail-title-text"></div>
+          <div id="detail-meta" class="detail-meta"></div>
+        </div>
+      </div>
+      <div id="messages" class="messages"></div>
+    </div>
+  </main>
+  <div id="menu-popover" class="menu-popover hidden" role="menu"></div>
+  <div id="export-modal" class="export-modal hidden" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
+    <div class="export-modal-backdrop" data-export-close></div>
+    <div class="export-modal-content">
+      <div class="export-modal-header">
+        <span id="export-modal-title">Export Markdown</span>
+        <button class="export-modal-close" type="button" aria-label="Close" data-export-close>×</button>
+      </div>
+      <div id="export-modal-preview" class="export-modal-preview" tabindex="0"></div>
+      <div class="export-modal-actions">
+        <button id="export-modal-copy" class="export-modal-btn" type="button">Copy</button>
+        <button id="export-modal-save" class="export-modal-btn primary" type="button">Save…</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

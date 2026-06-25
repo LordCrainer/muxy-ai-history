@@ -1,0 +1,69 @@
+{
+  "name": "ai-history",
+  "version": "0.6.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
+    "build:surfaces": "vite build",
+    "test": "node tests/test-parsers.mjs && node tests/test-chunked-write.mjs && node tests/test-open-in-terminal.mjs",
+    "test:oit": "node tests/test-open-in-terminal.mjs"
+  },
+  "devDependencies": {
+    "vite": "^7.3.5"
+  },
+  "muxy": {
+    "$schema": "https://raw.githubusercontent.com/muxy-app/muxy/main/docs/extensions/schema/manifest.schema.json",
+    "description": "View conversation history from Claude Code and OpenCode inside Muxy.",
+    "permissions": [
+      "panels:write",
+      "notifications:write",
+      "tabs:read",
+      "tabs:write",
+      "git:read",
+      "projects:read",
+      "projects:write",
+      "commands:exec"
+    ],
+    "panels": [
+      {
+        "id": "history",
+        "title": "AI History",
+        "entry": "panel.html",
+        "position": "right",
+        "mode": "pinned"
+      }
+    ],
+    "commands": [
+      {
+        "id": "toggle-history",
+        "title": "Toggle AI History",
+        "defaultShortcut": "cmd+shift+h",
+        "action": {
+          "kind": "togglePanel",
+          "panel": "history"
+        }
+      },
+      {
+        "id": "refresh-history",
+        "title": "Refresh AI History"
+      }
+    ],
+    "topbarItems": [
+      {
+        "id": "history",
+        "icon": {
+          "symbol": "clock.arrow.circlepath"
+        },
+        "tooltip": "Toggle AI History",
+        "command": "toggle-history"
+      }
+    ],
+    "marketplace": {
+      "author": "LordCrainer",
+      "github": "LordCrainer",
+      "categories": ["productivity", "ai"]
+    }
+  }
+}
