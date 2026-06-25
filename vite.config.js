@@ -33,6 +33,14 @@ function fixupOutputPlugin() {
 
 export default defineConfig({
   plugins: [fixupOutputPlugin()],
+  // Explicitly map `process.env` to an empty object so any future code that
+  // accidentally reads from it (e.g. `process.env.HOME`) gets a loud
+  // `undefined` access at bundle time instead of being silently minified
+  // into a hidden literal — see the comment in src/panel/main.js for the
+  // full history of why this matters.
+  define: {
+    'process.env': '{}'
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

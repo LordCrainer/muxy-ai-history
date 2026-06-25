@@ -24,11 +24,11 @@ import {
 } from './utils.js';
 import { openInTerminal as openInTerminalImpl } from './open-in-terminal.js';
 
-const HOME = (typeof process !== 'undefined' && process.env && process.env.HOME) || '';
-const CLAUDE_PROJECTS = `${HOME}/.claude/projects`;
-const OPENCODE_DB = `${HOME}/.local/share/opencode/opencode.db`;
-const SIDECAR_PATH = `${HOME}/.config/muxy/extensions/ai-history/custom-titles.json`;
-const EXPORT_DIR = `${HOME}/Downloads/ai-history`;
+// HOME-relative paths are resolved at runtime via `getPaths()` (see below).
+// We can't use `process.env.HOME` because the panel runs in a browser and the
+// Vite/esbuild minifier rewrites `process.env` to an empty object literal, so
+// any HOME reference would become `undefined` in the bundle. Instead we ask
+// the host shell for `$HOME` via muxy.exec.
 const PAGE_SIZE = 50;
 const SIDECAR_KEY_PREFIX = (provider) => `${provider}:`;
 
@@ -87,6 +87,36 @@ function muxyExec(cmd, args, opts = {}) {
       resolve({ exitCode: -1, stdout: '', stderr: e.message || String(e) });
     }
   });
+}
+
+// Resolves the user's home directory by running `printf %s "$HOME"` in the
+// host shell. The Promise is cached so subsequent callers (including
+// concurrent first callers) share a single shell invocation. Returns '' on
+// failure (and logs a warning) — callers that need a non-empty home should
+// check and surface a diagnostic error to the user.
+let _homeCache = null;
+function getHome() {
+  if (_homeCache) return _homeCache;
+  _homeCache = (async () => {
+    const result = await muxyExec(['/bin/sh', '-c', 'printf %s "$HOME"'], { timeoutMs: 2e3 });
+    if (result.exitCode !== 0) {
+      console.warn(`[ai-history] HOME resolution failed: exitCode=${result.exitCode} stderr=${result.stderr || ''}`);
+      return '';
+    }
+    return (result.stdout || '').trim();
+  })();
+  return _homeCache;
+}
+
+// Returns the lazy, HOME-relative paths used throughout the panel. Each call
+// re-derives from the cached `getHome()` value.
+async function getPaths() {
+  const home = await getHome();
+  return {
+    CLAUDE_PROJECTS: `${home}/.claude/projects`,
+    OPENCODE_DB: `${home}/.local/share/opencode/opencode.db`,
+    SIDECAR_PATH: `${home}/.config/muxy/extensions/ai-history/custom-titles.json`
+  };
 }
 
 function muxyExecShell(shellCommand, opts = {}) {
@@ -396,6 +426,7 @@ async function readClaudeSessionMessages(filePath) {
 }
 
 async function listClaudeConversations() {
+  const { CLAUDE_PROJECTS } = await getPaths();
   const projectsRes = await muxyExec('/bin/ls', ['-1', CLAUDE_PROJECTS], { timeoutMs: 5e3 });
   if (projectsRes.exitCode !== 0) return [];
   const projects = (projectsRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
@@ -415,6 +446,7 @@ async function listClaudeConversations() {
 }
 
 async function readOpencodeSessions() {
+  const { OPENCODE_DB } = await getPaths();
   const sql = `SELECT id, title, directory, time_created, time_updated FROM session ORDER BY time_updated DESC LIMIT 500`;
   const result = await muxyExec('/usr/bin/sqlite3', ['-json', OPENCODE_DB, sql], { timeoutMs: 15e3 });
   if (result.exitCode !== 0) return [];
@@ -438,6 +470,7 @@ async function readOpencodeSessions() {
 }
 
 async function readOpencodeMessages(sessionId) {
+  const { OPENCODE_DB } = await getPaths();
   const safeId = escapeSqlString(sessionId);
   const sql = `SELECT m.id, m.time_created, p.data FROM message m LEFT JOIN part p ON p.message_id = m.id WHERE m.session_id = '${safeId}' ORDER BY m.time_created ASC, p.id ASC`;
   const result = await muxyExec('/usr/bin/sqlite3', ['-json', OPENCODE_DB, sql], { timeoutMs: 15e3 });
@@ -482,6 +515,7 @@ async function readOpencodeMessages(sessionId) {
 }
 
 async function loadCustomTitles() {
+  const { SIDECAR_PATH } = await getPaths();
   const result = await muxyExec('/bin/cat', [SIDECAR_PATH], { timeoutMs: 3e3 });
   if (result.exitCode !== 0 || !result.stdout) return {};
   try {
@@ -494,6 +528,7 @@ async function loadCustomTitles() {
 }
 
 async function saveCustomTitles() {
+  const { SIDECAR_PATH } = await getPaths();
   const json = JSON.stringify(state.customTitles, null, 2);
   const result = await writeLargeStringToFile(SIDECAR_PATH, json);
   if (!result.ok) {
@@ -508,6 +543,13 @@ async function loadConversations() {
   els.conversations.innerHTML = '';
   state.page = 1;
   try {
+    const home = await getHome();
+    if (!home) {
+      setStatus('Could not resolve HOME directory. Check the Muxy extension logs.', 'error');
+      state.all = [];
+      renderList();
+      return;
+    }
     state.customTitles = await loadCustomTitles();
     const [claude, opencode] = await Promise.all([
       listClaudeConversations().catch((e) => { console.warn('claude list error', e); return []; }),
@@ -601,54 +643,6 @@ function showList() {
   renderList();
 }
 
-async function exportConversation(provider, id, file) {
-  const visible = getVisibleConversations(state.all, {
-    provider: state.provider,
-    projectFilter: state.projectFilter,
-    search: state.search
-  }).map((c) => applyCustomTitle(c, state.customTitles));
-  const conv = visible.find((c) => c.id === id && c.provider === provider) ||
-    state.all.find((c) => c.id === id && c.provider === provider);
-  if (!conv) {
-    muxyToast({ title: 'Export failed', body: 'Conversation not found', variant: 'error' });
-    return;
-  }
-  setStatus('Exporting...', 'info');
-  let messages = [];
-  try {
-    if (provider === 'claude') {
-      messages = await readClaudeSessionMessages(file);
-    } else if (provider === 'opencode') {
-      messages = await readOpencodeMessages(id);
-    }
-  } catch (e) {
-    muxyToast({ title: 'Export failed', body: e.message || String(e), variant: 'error' });
-    setStatus('Export failed', 'error');
-    return;
-  }
-  const markdown = buildMarkdown(conv, messages);
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  const filename = `${slugify(conv.title)}-${conv.id.slice(0, 8)}-${stamp}.md`;
-  const fullPath = `${EXPORT_DIR}/${filename}`;
-
-  const result = await writeLargeStringToFile(fullPath, markdown, {
-    onProgress: (i, total) => setStatus(`Exporting... (chunk ${i}/${total})`, 'info')
-  });
-  if (!result.ok) {
-    muxyToast({ title: 'Export failed', body: result.error || 'write error', variant: 'error' });
-    setStatus('Export failed', 'error');
-    return;
-  }
-
-  muxyToast({ title: 'Exported', body: filename, variant: 'info' });
-  setStatus(`Exported to ${fullPath} (${result.chunks} chunk${result.chunks === 1 ? '' : 's'})`, 'ok');
-  if (typeof muxy !== 'undefined' && muxy.exec) {
-    try { muxy.exec(['/usr/bin/open', '-R', fullPath]); } catch {}
-  }
-}
-
 async function copyMarkdownToClipboard(conv, messages) {
   const markdown = buildMarkdown(conv, messages);
   // Prefer native Clipboard API; fall back to pbcopy via chunked base64.
@@ -719,6 +713,7 @@ async function renameConversation(provider, id, newTitle) {
   }
   const key = SIDECAR_KEY_PREFIX(provider) + id;
   if (provider === 'opencode') {
+    const { OPENCODE_DB } = await getPaths();
     const sql = buildRenameSql(id, trimmed);
     const res = await muxyExec('/usr/bin/sqlite3', [OPENCODE_DB, sql], { timeoutMs: 5e3 });
     if (res.exitCode !== 0) {
