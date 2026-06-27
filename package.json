@@ -22,6 +22,12 @@
       "When the user is reading a conversation in detail view and Muxy switches projects, the detail view is preserved — only state.projectFilter and the list are updated. The detail view reflects the new filter when the user navigates back.",
       "The 'openInTerminal' flow (v0.5) still auto-switches Muxy to the project that owns the conversation before opening the terminal, so the terminal's cwd matches the conversation. This is a different use case (preparing context for an action) and is intentionally preserved."
     ],
+    "0.8.1": [
+      "Auto-switch (v0.8.0) was too silent: failures (no match, list/switchTo errors) and the already-active case had no UI feedback. Now every outcome emits a status bar message (warn/err/ok) and every step logs a [ai-history] diagnostic line to the console for easy debugging in Muxy DevTools."
+    ],
+    "0.8.0": [
+      "Auto-switch to the selected project: choosing a project in the picker (or clicking a breadcrumb in the detail view) switches Muxy to that project when a matching one exists. The next resume in terminal then skips the project switch step. The switch is silent (status bar only)."
+    ],
     "0.7.0": [
       "Project picker menu with search, replacing the static <select> dropdown",
       "Click on a conversation now resumes the session in a terminal; Cmd/Ctrl+Click opens the detail view",
@@ -31,12 +37,6 @@
       "Cmd+P / Ctrl+P global shortcut to open the project picker",
       "Project detection fix: cache invalidation on refresh, ~ and $HOME expansion in OpenCode sessions",
       "Removed 'Open in Terminal' from the 3-dot menu (now the primary click action)"
-    ],
-    "0.8.0": [
-      "Auto-switch to the selected project: choosing a project in the picker (or clicking a breadcrumb in the detail view) switches Muxy to that project when a matching one exists. The next resume in terminal then skips the project switch step. The switch is silent (status bar only)."
-    ],
-    "0.8.1": [
-      "Auto-switch (v0.8.0) was too silent: failures (no match, list/switchTo errors) and the already-active case had no UI feedback. Now every outcome emits a status bar message (warn/err/ok) and every step logs a [ai-history] diagnostic line to the console for easy debugging in Muxy DevTools."
     ]
   },
   "muxy": {
