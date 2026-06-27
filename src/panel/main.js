@@ -329,29 +329,25 @@ function countConversationsForProject(projectPath) {
   return state.all.filter((c) => projectMatchesFilter(c.project, projectPath)).length;
 }
 
-async function selectPickerItem(index) {
+function selectPickerItem(index) {
   if (!state.pickerItems) return;
   const item = state.pickerItems[index];
   if (!item) return;
   if (item.kind === 'project-header' || item.kind === 'path-header') return;
   closeProjectPicker();
-  // Awaited so the status bar updates before the user moves on.
-  await selectProjectAndFilter(item.value || '');
+  // Synchronous: helper applies the filter and re-renders. closeProjectPicker
+  // runs first so the popover disappears immediately.
+  selectProjectAndFilter(item.value || '');
 }
 
-// Thin wrapper that injects the real DOM, Muxy, and state deps. Kept
+// Thin wrapper that injects the real DOM and state deps. Kept
 // synchronous-shaped (returns a Promise) so the caller can fire-and-forget.
 function selectProjectAndFilter(path) {
   return selectProjectAndFilterImpl({
     state,
-    muxy,
     els,
     refreshPickerButton,
-    renderList,
-    setStatus,
-    findBestProjectForPath,
-    isProjectActive,
-    pathInside
+    renderList
   }, path);
 }
 
