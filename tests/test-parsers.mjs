@@ -109,14 +109,14 @@ check('uses muxy.exec', mainJs.includes('muxy.exec'));
 // Test 9: new UI elements present in source panel.html
 console.log('\n9. New UI elements in panel.html');
 const srcPanelHtml = readFileSync(join(extDir, 'src/panel/panel.html'), 'utf-8');
-check('has project-filter select', srcPanelHtml.includes('id="project-filter"'));
+check('has project-picker button', srcPanelHtml.includes('id="project-picker"'));
 check('has load-more button', srcPanelHtml.includes('id="load-more"'));
 check('has menu-popover container', srcPanelHtml.includes('id="menu-popover"'));
 
 // Test 10: new UI elements styled
 console.log('\n10. New UI elements styled in styles.css');
 const styles = readFileSync(join(extDir, 'src/panel/styles.css'), 'utf-8');
-check('styles .project-filter', styles.includes('.project-filter'));
+check('styles .project-picker', styles.includes('.project-picker'));
 check('styles .load-more', styles.includes('.load-more'));
 check('styles .menu-popover', styles.includes('.menu-popover'));
 check('styles .conv-menu-trigger', styles.includes('.conv-menu-trigger'));
@@ -139,6 +139,8 @@ check('getVisibleConversations exists', typeof utils.getVisibleConversations ===
 check('paginate exists', typeof utils.paginate === 'function');
 check('uniqueProjects exists', typeof utils.uniqueProjects === 'function');
 check('decodeClaudeProject exists', typeof utils.decodeClaudeProject === 'function');
+check('abbreviateHome exists', typeof utils.abbreviateHome === 'function');
+check('expandHome exists', typeof utils.expandHome === 'function');
 check('extractRepoLabel exists', typeof utils.extractRepoLabel === 'function');
 check('buildResumeCommand exists', typeof utils.buildResumeCommand === 'function');
 check('projectDisplayGroups exists', typeof utils.projectDisplayGroups === 'function');
@@ -298,6 +300,27 @@ check('handles null', utils.decodeClaudeProject(null) === '');
 check('handles single segment', utils.decodeClaudeProject('-foo') === '/foo');
 check('handles deep nested', utils.decodeClaudeProject('-Users-dev-Repos-zt-zlp-2') === '/Users/dev/Repos/zt/zlp/2');
 
+// Test 24b: v0.7.0 home expansion helpers
+console.log('\n21b. v0.7.0 abbreviateHome / expandHome / decodeClaudeProject(home)');
+// abbreviateHome
+check('abbreviateHome: subpath under home', utils.abbreviateHome('/Users/x/Repos/foo', '/Users/x') === '~/Repos/foo');
+check('abbreviateHome: path === home', utils.abbreviateHome('/Users/x', '/Users/x') === '~');
+check('abbreviateHome: path outside home', utils.abbreviateHome('/tmp/scratch', '/Users/x') === '/tmp/scratch');
+check('abbreviateHome: empty path', utils.abbreviateHome('', '/Users/x') === '');
+check('abbreviateHome: empty home', utils.abbreviateHome('/Users/x/foo', '') === '/Users/x/foo');
+check('abbreviateHome: null home', utils.abbreviateHome('/Users/x/foo', null) === '/Users/x/foo');
+check('abbreviateHome: undefined home', utils.abbreviateHome('/Users/x/foo', undefined) === '/Users/x/foo');
+// expandHome
+check('expandHome: ~/foo', utils.expandHome('~/foo', '/Users/x') === '/Users/x/foo');
+check('expandHome: ~', utils.expandHome('~', '/Users/x') === '/Users/x');
+check('expandHome: $HOME/foo', utils.expandHome('$HOME/foo', '/Users/x') === '/Users/x/foo');
+check('expandHome: absolute passthrough', utils.expandHome('/already/abs', '/Users/x') === '/already/abs');
+check('expandHome: empty home', utils.expandHome('~/foo', '') === '~/foo');
+// decodeClaudeProject with home param
+check('decodeClaudeProject(home): ~-Users-x-Repos-foo', utils.decodeClaudeProject('~-Users-x-Repos-foo', '/Users/x') === '/Users/x/Repos/foo');
+check('decodeClaudeProject(home): ~', utils.decodeClaudeProject('~', '/Users/x') === '/Users/x');
+check('decodeClaudeProject(home): -Users-x-Repos-foo unchanged', utils.decodeClaudeProject('-Users-x-Repos-foo', '/Users/x') === '/Users/x/Repos/foo');
+
 // Test 25: extractRepoLabel
 console.log('\n22. extractRepoLabel');
 const gitMap = {
@@ -378,9 +401,9 @@ if (distAssetMatch) {
   check('bundle has opencode -s', distJs.includes('opencode -s') || distJs.includes("'-s'"));
   check('bundle has clipboard write', distJs.includes('clipboard.writeText') || distJs.includes('writeText'));
   check('bundle has git rev-parse', distJs.includes('rev-parse') || distJs.includes('show-toplevel'));
-  check('bundle has optgroup', distJs.includes('optgroup'));
-  check('bundle has Git repos label', distJs.includes('Git repos'));
-  check('bundle has Other paths label', distJs.includes('Other paths'));
+  check('bundle has picker-section class', distJs.includes('picker-section'));
+  check('bundle has PROJECTS section', distJs.includes('PROJECTS'));
+  check('bundle has PATHS section', distJs.includes('PATHS'));
   check('bundle has submenu (Copy to Clipboard)', distJs.includes('Copy to Clipboard'));
   check('bundle has submenu (Save as Markdown)', distJs.includes('Save as Markdown'));
 }
@@ -807,23 +830,27 @@ check('logs listFn name', oiSrc.includes('using listFn='));
 check('logs switchFn name + args', oiSrc.includes('using switchFn='));
 
 // Test 56: v0.6.1 bundle has detailed logging
-// Note: Vite minifies olog → b, but numeric/string step values are preserved
-// as `b(0,...)` / `b("pre",...)`. The `step=` part becomes a template literal
-// `step=${e}` so we can't grep "step=0" directly.
+// Note: Vite minifies olog/owarn to short single-letter names that change
+// across builds (currently `p` for olog, `v` for owarn; older builds used
+// `c`/`b`). Numeric and string step values are preserved as `p(0,...)` /
+// `p("pre",...)`. The `step=` part becomes a template literal `step=${e}`
+// so we can't grep "step=0" directly.
 console.log('\n53. v0.6.1 bundle has detailed logging');
 if (distAssetMatch) {
   const distJsV9 = readFileSync(join(extDir, 'dist/assets', distAssetMatch[1]), 'utf-8');
   check('bundle has [openInTerminal] tag', distJsV9.includes('[openInTerminal]'));
-  // Count olog() invocations with each step value (olog is minified to b)
+  // Count olog() invocations with each step value. The minified letter
+  // changes across Vite versions, so we match a small class of plausible
+  // single letters: c (legacy), p (current olog), v (current owarn).
   // Numeric steps
   const numSteps = [0, 1, 2, 3, 4, 5, 6, 7];
   for (const s of numSteps) {
-    const re = new RegExp(`\\bc\\(${s},`);
+    const re = new RegExp(`\\b[cpv]\\(${s},`);
     check(`bundle has olog(${s},...) call`, re.test(distJsV9));
   }
   // String steps
   for (const s of ['pre', '3b', '7b', 'fallback']) {
-    const re = new RegExp(`\\bc\\("${s}",`);
+    const re = new RegExp(`\\b[cpv]\\("${s}",`);
     check(`bundle has olog("${s}",...) call`, re.test(distJsV9));
   }
   check('bundle logs "first tab keys"', distJsV9.includes('first tab keys'));

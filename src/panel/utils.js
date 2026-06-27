@@ -144,16 +144,71 @@ export function uniqueProjects(list) {
   return Array.from(set).sort();
 }
 
+// Abbreviates an absolute path by replacing its `home` prefix with `~`.
+// - Returns `~` when `path === home` (no trailing slash).
+// - Returns `path` unchanged when `home` is empty/null/undefined or when
+//   `path` doesn't live under `home` (uses strict `home + '/'` prefix so
+//   `/foo/barx` doesn't collapse to `~/barx` when home is `/foo/bar`).
+export function abbreviateHome(path, home) {
+  if (typeof path !== 'string') return path;
+  if (!home || typeof home !== 'string') return path;
+  if (path === home) return '~';
+  if (path.startsWith(home + '/')) return '~' + path.slice(home.length);
+  return path;
+}
+
+// Expands a `~` / `~/` / `$HOME` prefix in `path` to the absolute `home`.
+// - `~` -> `home`; `~/foo` -> `home/foo`.
+// - Literal `$HOME` anywhere in `path` is replaced with `home`.
+// - Already-absolute paths (starting with `/`) pass through unchanged.
+// - When `path` is `~/X` and `X` is itself an absolute path that starts with
+//   `home` (e.g. `~/Users/x/...` decoded from Claude's `~-...` form), the
+//   leading `~/` and the redundant home prefix are collapsed so the result
+//   is the original absolute path, not a doubled-home path.
+// - Returns `path` as-is when `home` is empty — caller must provide a usable
+//   `home` (e.g. `os.homedir()`) for any expansion to happen.
+export function expandHome(path, home) {
+  if (typeof path !== 'string') return path;
+  if (!home) return path;
+  if (path === '~') return home;
+  if (path.startsWith('~/')) {
+    const rest = path.slice(2);
+    // Collapse `~/X` where X (treated as absolute) already starts with home
+    if (rest.startsWith('/') && rest.startsWith(home)) {
+      return rest;
+    }
+    if (('/' + rest).startsWith(home)) {
+      return '/' + rest;
+    }
+    return home + '/' + rest;
+  }
+  if (path.includes('$HOME')) return path.split('$HOME').join(home);
+  if (path.startsWith('/')) return path;
+  return path;
+}
+
 // Decodes a Claude Code project dir back to a real filesystem path.
 // Claude encodes "/Users/x/Repos/ac" as "-Users-x-Repos-ac".
-// Returns the same string for absolute paths that don't look encoded.
-export function decodeClaudeProject(project) {
+// Paths that began with `~/` are encoded as `~-Users-x-...`; we decode the
+// leading `~-` back to `~/` and then expand with `home` (if provided) so the
+// result is an absolute path. Returns the same string for absolute paths
+// that don't look encoded. `home` is optional; pass it to resolve `~`-rooted
+// paths to a real path (otherwise they round-trip through `expandHome` as-is).
+export function decodeClaudeProject(project, home = '') {
   if (!project) return '';
   // Already an absolute path
   if (project.startsWith('/')) return project;
+  // Encoded form starting with `~-` (path that began with `~/`)
+  if (project.startsWith('~-')) {
+    return expandHome('~/' + project.slice(2).replace(/-/g, '/'), home);
+  }
   // Encoded form starts with '-' (the encoded form of the leading '/')
   if (project.startsWith('-')) {
     return '/' + project.slice(1).replace(/-/g, '/');
+  }
+  // Plain `~` or `~/...` — expand with `home` if we have one
+  if (project === '~' || project.startsWith('~/')) {
+    return expandHome(project, home);
   }
   // Fallback: just return as-is
   return project;

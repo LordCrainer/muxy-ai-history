@@ -23,9 +23,10 @@
     </div>
 
     <div class="filters">
-      <select id="project-filter" class="project-filter" aria-label="Filter by project">
-        <option value="">All projects</option>
-      </select>
+      <button id="project-picker" class="project-picker" type="button" aria-label="Filter by project" aria-haspopup="listbox" aria-expanded="false">
+        <span class="project-picker-label">All projects</span>
+        <span class="project-picker-caret" aria-hidden="true">▾</span>
+      </button>
       <input id="search" type="search" placeholder="Search conversations..." />
     </div>
 
@@ -46,6 +47,15 @@
     </div>
   </main>
   <div id="menu-popover" class="menu-popover hidden" role="menu"></div>
+  <div id="project-picker-popover" class="picker-popover hidden" role="dialog" aria-label="Filter projects">
+    <div class="picker-header">
+      <input id="project-picker-search" class="picker-search" type="search" placeholder="Filter projects..." autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="project-picker-list" class="picker-list" role="listbox"></div>
+    <div class="picker-footer">
+      <span class="picker-hint">↑↓ navigate · ↵ select · Esc close</span>
+    </div>
+  </div>
   <div id="export-modal" class="export-modal hidden" role="dialog" aria-modal="true" aria-labelledby="export-modal-title">
     <div class="export-modal-backdrop" data-export-close></div>
     <div class="export-modal-content">

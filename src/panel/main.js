@@ -20,8 +20,17 @@ import {
   pathInside,
   findBestProjectForPath,
   findBestWorktreeForPath,
-  isWorktreeActive
+  isWorktreeActive,
+  abbreviateHome,
+  expandHome
 } from './utils.js';
+import {
+  filterGroups,
+  getPickerLabel,
+  buildPickerItems,
+  matchItem,
+  findActiveIndex
+} from './project-picker.js';
 import { openInTerminal as openInTerminalImpl } from './open-in-terminal.js';
 
 // HOME-relative paths are resolved at runtime via `getPaths()` (see below).
@@ -41,17 +50,22 @@ const state = {
   all: [],
   customTitles: {},
   gitToplevelMap: {},
+  gitToplevelMapUpdated: 0,
   currentDetail: null,
   menuTargetId: null,
   menuView: 'main',
   menuAnchor: null,
-  exportContext: null
+  exportContext: null,
+  home: '',
+  pickerOpen: false,
+  pickerHighlight: 0,
+  pickerQuery: '',
+  pickerItems: null
 };
 
 const els = {
   refresh: document.getElementById('refresh'),
   search: document.getElementById('search'),
-  projectFilter: document.getElementById('project-filter'),
   status: document.getElementById('status'),
   conversations: document.getElementById('conversations'),
   loadMoreWrap: document.getElementById('load-more-wrap'),
@@ -66,7 +80,11 @@ const els = {
   exportModal: document.getElementById('export-modal'),
   exportPreview: document.getElementById('export-modal-preview'),
   exportCopy: document.getElementById('export-modal-copy'),
-  exportSave: document.getElementById('export-modal-save')
+  exportSave: document.getElementById('export-modal-save'),
+  projectPicker: document.getElementById('project-picker'),
+  projectPickerPopover: document.getElementById('project-picker-popover'),
+  projectPickerSearch: document.getElementById('project-picker-search'),
+  projectPickerList: document.getElementById('project-picker-list')
 };
 
 function muxyExec(cmd, args, opts = {}) {
@@ -103,7 +121,9 @@ function getHome() {
       console.warn(`[ai-history] HOME resolution failed: exitCode=${result.exitCode} stderr=${result.stderr || ''}`);
       return '';
     }
-    return (result.stdout || '').trim();
+    const home = (result.stdout || '').trim();
+    state.home = home;
+    return home;
   })();
   return _homeCache;
 }
@@ -239,48 +259,112 @@ function renderContent(text) {
   return html;
 }
 
-function populateProjectFilter() {
-  const projects = uniqueProjects(state.all);
-  const current = state.projectFilter;
-  const groups = projectDisplayGroups(projects, state.gitToplevelMap);
-  let html = '<option value="">All projects</option>';
-  if (groups.git.length > 0) {
-    html += '<optgroup label="Git repos">';
-    for (const g of groups.git) {
-      html += `<option value="${escapeHtml(g.project)}" title="${escapeHtml(g.displayPath)}">${escapeHtml(g.label)}</option>`;
-    }
-    html += '</optgroup>';
+function refreshPickerButton() {
+  if (!els.projectPicker) return;
+  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap);
+  const home = state.home || '';
+  const label = getPickerLabel(state.projectFilter, groups, home);
+  els.projectPicker.textContent = label;
+  els.projectPicker.title = label;
+}
+
+function openProjectPicker() {
+  if (!els.projectPickerPopover) return;
+  state.pickerOpen = true;
+  state.pickerQuery = '';
+  state.pickerHighlight = 0;
+  renderPickerList();
+  els.projectPickerPopover.classList.remove('hidden');
+  if (els.projectPicker) {
+    const rect = els.projectPicker.getBoundingClientRect();
+    els.projectPickerPopover.style.left = `${Math.max(4, rect.left)}px`;
+    els.projectPickerPopover.style.top = `${rect.bottom + 4}px`;
   }
-  if (groups.nonGit.length > 0) {
-    html += '<optgroup label="Other paths">';
-    for (const g of groups.nonGit) {
-      const label = g.label.length > 60 ? '…' + g.label.slice(-58) : g.label;
-      html += `<option value="${escapeHtml(g.project)}" title="${escapeHtml(g.displayPath)}">${escapeHtml(label)}</option>`;
-    }
-    html += '</optgroup>';
-  }
-  els.projectFilter.innerHTML = html;
-  if (current) {
-    // Restore selection if the value still exists (raw value or toplevel)
-    const match = els.projectFilter.querySelector(`option[value="${CSS.escape(current)}"]`);
-    if (match) els.projectFilter.value = current;
+  if (els.projectPickerSearch) {
+    setTimeout(() => els.projectPickerSearch.focus(), 0);
   }
 }
 
+function closeProjectPicker() {
+  if (!els.projectPickerPopover) return;
+  state.pickerOpen = false;
+  els.projectPickerPopover.classList.add('hidden');
+  if (els.projectPickerSearch) els.projectPickerSearch.value = '';
+}
+
+function renderPickerList() {
+  if (!els.projectPickerList) return;
+  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap);
+  const filtered = filterGroups(groups, state.pickerQuery);
+  const allGroups = {
+    git: filtered.git.map((g) => ({ ...g, count: countConversationsForProject(g.toplevel || g.project) })),
+    nonGit: filtered.nonGit.map((g) => ({ ...g, count: countConversationsForProject(g.project) }))
+  };
+  const items = buildPickerItems(allGroups, state.projectFilter);
+  state.pickerItems = items;
+  state.pickerHighlight = findActiveIndex(items, state.projectFilter);
+  els.projectPickerList.innerHTML = items.map((item, i) => renderPickerItemHTML(item, i)).join('');
+}
+
+function renderPickerItemHTML(item, i) {
+  const activeClass = i === state.pickerHighlight ? ' active' : '';
+  if (item.kind === 'project-header' || item.kind === 'path-header') {
+    return `<div class="picker-section-header">${escapeHtml(item.label)}</div>`;
+  }
+  const check = item.active ? '<span class="picker-check">✓</span>' : '<span class="picker-check"></span>';
+  const count = item.count != null ? `<span class="picker-count">${item.count}</span>` : '';
+  const cls = item.kind === 'all' ? 'picker-item all' : `picker-item ${item.kind}`;
+  return `<button class="${cls}${activeClass}" data-index="${i}" data-value="${escapeHtml(item.value || '')}" type="button">
+    ${check}
+    <span class="picker-label">${escapeHtml(item.label)}</span>
+    ${count}
+  </button>`;
+}
+
+function countConversationsForProject(projectPath) {
+  if (!projectPath) return state.all.length;
+  return state.all.filter((c) => projectMatchesFilter(c.project, projectPath)).length;
+}
+
+function selectPickerItem(index) {
+  if (!state.pickerItems) return;
+  const item = state.pickerItems[index];
+  if (!item) return;
+  if (item.kind === 'project-header' || item.kind === 'path-header') return;
+  state.projectFilter = item.value || '';
+  state.page = 1;
+  refreshPickerButton();
+  renderList();
+  closeProjectPicker();
+}
+
 async function gitToplevel(path) {
-  const res = await muxyExec('/usr/bin/git', ['-C', path, 'rev-parse', '--show-toplevel'], { timeoutMs: 4e3 });
-  if (res.exitCode !== 0) return null;
+  const res = await muxyExec('/usr/bin/git', ['-C', path, 'rev-parse', '--show-toplevel'], { timeoutMs: 6e3 });
+  if (res.exitCode !== 0) {
+    // exit 128 = not a git repo (expected for non-git paths); other codes = error
+    if (res.exitCode !== 128) {
+      console.warn(`[gitToplevel] unexpected exit ${res.exitCode} for ${path}: ${(res.stderr || '').slice(0, 100)}`);
+    }
+    return null;
+  }
   const t = (res.stdout || '').trim();
   return t || null;
 }
 
-async function loadProjectLabels() {
+async function loadProjectLabels(force = false) {
   const projects = uniqueProjects(state.all);
   const decodedPaths = new Set();
   for (const p of projects) {
-    const decoded = decodeClaudeProject(p);
+    const decoded = decodeClaudeProject(p, state.home || '');
     if (decoded) decodedPaths.add(decoded);
   }
+  // Cache invalidation: re-scan if forced, or if there are new paths we haven't seen
+  const knownPaths = new Set(Object.keys(state.gitToplevelMap));
+  const hasNewPaths = Array.from(decodedPaths).some((p) => !knownPaths.has(p));
+  if (!force && !hasNewPaths && state.gitToplevelMapUpdated > 0) {
+    return; // cache is fresh
+  }
+  console.log(`[loadProjectLabels] scanning ${decodedPaths.size} path(s) (force=${force}, newPaths=${hasNewPaths})`);
   const entries = await Promise.all(
     Array.from(decodedPaths).map(async (path) => {
       const top = await gitToplevel(path);
@@ -292,6 +376,8 @@ async function loadProjectLabels() {
     if (top) map[path] = top;
   }
   state.gitToplevelMap = map;
+  state.gitToplevelMapUpdated = Date.now();
+  console.log(`[loadProjectLabels] found ${Object.keys(map).length} git repo(s) of ${decodedPaths.size} path(s)`);
 }
 
 function renderList() {
@@ -300,7 +386,7 @@ function renderList() {
     projectFilter: state.projectFilter,
     search: state.search
   }).map((c) => applyCustomTitle(c, state.customTitles));
-  populateProjectFilter();
+  refreshPickerButton();
   if (state.all.length === 0) {
     els.conversations.innerHTML = '<div class="empty">No conversations found</div>';
     els.loadMoreWrap.classList.add('hidden');
@@ -311,10 +397,14 @@ function renderList() {
     els.loadMoreWrap.classList.add('hidden');
     return;
   }
+  const home = state.home || '';
   const { items, hasMore, remaining } = paginate(visibleAll, state.page, state.pageSize);
   els.conversations.innerHTML = items
     .map(
-      (c) => `
+      (c) => {
+        const decodedPath = decodeClaudeProject(c.project || '', home);
+        const displayPath = abbreviateHome(decodedPath, home) || displayProject(c.project);
+        return `
       <div class="conv" data-provider="${c.provider}" data-id="${escapeHtml(c.id)}" data-file="${escapeHtml(c.file || '')}">
         <button class="conv-menu-trigger" type="button" aria-label="Menu" data-menu-id="${escapeHtml(c.id)}">⋮</button>
         <div class="conv-header">
@@ -322,12 +412,13 @@ function renderList() {
           <span class="conv-title">${escapeHtml(c.title || '(untitled)')}</span>
         </div>
         <div class="conv-meta">
-          <span class="conv-project" title="${escapeHtml(c.project || '')}">${escapeHtml(displayProject(c.project))}</span>
+          <span class="conv-project" title="${escapeHtml(decodedPath)}">${escapeHtml(displayPath)}</span>
           <span class="conv-time">${escapeHtml(formatDate(c.lastTimestamp))}</span>
         </div>
         <div class="conv-preview">${escapeHtml(c.preview || '')}</div>
       </div>
-    `
+    `;
+      }
     )
     .join('');
   if (hasMore) {
@@ -454,10 +545,11 @@ async function readOpencodeSessions() {
   if (!text) return [];
   try {
     const rows = JSON.parse(text);
+    const home = state.home || '';
     return rows.map((r) => ({
       provider: 'opencode',
       id: r.id,
-      project: r.directory || '',
+      project: r.directory ? expandHome(r.directory, home) : '',
       title: (r.title || '(untitled)').slice(0, 120),
       preview: (r.title || '').slice(0, 240),
       messageCount: 0,
@@ -559,7 +651,7 @@ async function loadConversations() {
       ...claude.map((c) => ({ ...c, provider: 'claude' })),
       ...opencode.map((c) => ({ ...c, provider: 'opencode' }))
     ];
-    await loadProjectLabels();
+    await loadProjectLabels(true);
     const total = state.all.length;
     if (total === 0) {
       setStatus('No conversations found. Check that Claude Code or OpenCode are installed.', 'warn');
@@ -567,6 +659,7 @@ async function loadConversations() {
       setStatus(`${total} conversation${total === 1 ? '' : 's'} (${claude.length} Claude · ${opencode.length} OpenCode)`, 'ok');
     }
     renderList();
+    refreshPickerButton();
   } catch (e) {
     setStatus(`Error: ${e.message || e}`, 'error');
   }
@@ -608,11 +701,49 @@ function renderDetail() {
   els.detailTitle.textContent = (conv && conv.title) || '(untitled)';
   const meta = [];
   if (conv) {
-    if (conv.project) meta.push(conv.project);
     if (conv.lastTimestamp) meta.push(formatDate(conv.lastTimestamp));
   }
   meta.push(`${messages.length} message${messages.length === 1 ? '' : 's'}`);
   els.detailMeta.textContent = meta.join(' · ');
+
+  if (conv && conv.project) {
+    const home = state.home || '';
+    const decoded = decodeClaudeProject(conv.project, home);
+    const displayPath = abbreviateHome(decoded, home) || decoded;
+    const segments = displayPath.split('/').filter(Boolean);
+    const crumbs = [];
+    let running = '';
+    segments.forEach((seg, i) => {
+      if (i === 0 && seg === '~') {
+        running = home;
+        crumbs.push({ label: '~', path: home, isHome: true });
+      } else if (i === 0 && seg.startsWith('~')) {
+        const rest = seg.slice(1);
+        running = home + '/' + rest;
+        crumbs.push({ label: '~', path: home, isHome: true });
+        crumbs.push({ label: rest, path: running });
+      } else {
+        running = running ? running + '/' + seg : '/' + seg;
+        crumbs.push({ label: seg, path: running });
+      }
+    });
+    const crumbHTML = crumbs.map((c) =>
+      `<button class="crumb" data-path="${escapeHtml(c.path || '')}" type="button">${escapeHtml(c.label)}</button>`
+    ).join('<span class="crumb-sep">/</span>');
+    let crumbContainer = document.getElementById('detail-breadcrumb');
+    if (!crumbContainer) {
+      crumbContainer = document.createElement('div');
+      crumbContainer.id = 'detail-breadcrumb';
+      crumbContainer.className = 'breadcrumb';
+      els.detailMeta.parentNode.insertBefore(crumbContainer, els.detailMeta);
+    }
+    crumbContainer.innerHTML = crumbHTML;
+    crumbContainer.classList.remove('hidden');
+  } else {
+    const existing = document.getElementById('detail-breadcrumb');
+    if (existing) existing.classList.add('hidden');
+  }
+
   if (messages.length === 0) {
     els.messages.innerHTML = '<div class="empty">No messages</div>';
     setStatus('No messages found', 'warn');
@@ -801,7 +932,7 @@ function renderMenu() {
   if (state.menuView === 'main') {
     pop.innerHTML = `
       <button class="menu-item" data-action="view" type="button">View</button>
-      <button class="menu-item" data-action="open-terminal" type="button">Open in Terminal</button>
+      <button class="menu-item" data-action="copy-path" type="button">Copy path</button>
       <div class="menu-separator"></div>
       <button class="menu-item" data-action="export" type="button">
         <span>Export</span>
@@ -866,9 +997,32 @@ async function handleMenuAction(action) {
     if (provider && id && file != null) showDetail(provider, id, file);
     return;
   }
-  if (action === 'open-terminal') {
+  if (action === 'copy-path') {
     closeMenu();
-    if (provider && id) await openInTerminal(provider, id);
+    const conv = state.all.find((c) => c.id === id && c.provider === provider);
+    if (!conv || !conv.project) {
+      muxyToast({ title: 'Copy failed', body: 'No project path', variant: 'error' });
+      return;
+    }
+    const path = decodeClaudeProject(conv.project, state.home || '');
+    let ok = false;
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(path);
+        ok = true;
+      } catch (err) {
+        console.warn('clipboard write failed', err);
+      }
+    }
+    if (!ok) {
+      const res = await copyLargeStringToClipboard(path);
+      ok = res.ok;
+    }
+    if (ok) {
+      muxyToast({ title: 'Path copied', body: path.slice(-60), variant: 'info' });
+    } else {
+      muxyToast({ title: 'Copy failed', body: 'Could not access clipboard', variant: 'error' });
+    }
     return;
   }
   if (action === 'copy-md') {
@@ -966,11 +1120,6 @@ els.search.addEventListener('input', (e) => {
   state.page = 1;
   renderList();
 });
-els.projectFilter.addEventListener('change', (e) => {
-  state.projectFilter = e.target.value;
-  state.page = 1;
-  renderList();
-});
 els.loadMore.addEventListener('click', () => {
   state.page += 1;
   renderList();
@@ -1002,7 +1151,12 @@ els.conversations.addEventListener('click', (e) => {
   const provider = card.dataset.provider;
   const id = card.dataset.id;
   const file = card.dataset.file || null;
-  showDetail(provider, id, file);
+  // Cmd/Ctrl+Click opens the detail view; plain click resumes in terminal
+  if (e.metaKey || e.ctrlKey) {
+    showDetail(provider, id, file);
+  } else {
+    openInTerminal(provider, id);
+  }
 });
 els.menuPopover.addEventListener('click', (e) => {
   const item = e.target.closest('.menu-item') || e.target.closest('.back');
@@ -1087,5 +1241,98 @@ if (typeof muxy !== 'undefined' && muxy.events && muxy.events.subscribe) {
     console.warn('events.subscribe failed', e);
   }
 }
+
+// Project picker: button toggles popover
+if (els.projectPicker) {
+  els.projectPicker.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (state.pickerOpen) closeProjectPicker();
+    else openProjectPicker();
+  });
+}
+
+// Picker search: live filter
+if (els.projectPickerSearch) {
+  els.projectPickerSearch.addEventListener('input', (e) => {
+    state.pickerQuery = e.target.value || '';
+    renderPickerList();
+  });
+  els.projectPickerSearch.addEventListener('click', (e) => e.stopPropagation());
+}
+
+// Picker list: click selects
+if (els.projectPickerList) {
+  els.projectPickerList.addEventListener('click', (e) => {
+    const btn = e.target.closest('.picker-item');
+    if (!btn) return;
+    const index = parseInt(btn.dataset.index, 10);
+    if (Number.isNaN(index)) return;
+    selectPickerItem(index);
+  });
+}
+
+// Close picker on outside click
+document.addEventListener('click', (e) => {
+  if (!state.pickerOpen) return;
+  if (!els.projectPickerPopover) return;
+  if (e.target.closest('#project-picker-popover')) return;
+  if (e.target.closest('#project-picker')) return;
+  closeProjectPicker();
+});
+
+// Picker keyboard nav (Esc, ↑↓, Enter)
+document.addEventListener('keydown', (e) => {
+  if (!state.pickerOpen) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeProjectPicker();
+    if (els.projectPicker) els.projectPicker.focus();
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const next = matchItem(state.pickerItems || [], 'down', state.pickerHighlight);
+    if (next >= 0) {
+      state.pickerHighlight = next;
+      renderPickerList();
+    }
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    const prev = matchItem(state.pickerItems || [], 'up', state.pickerHighlight);
+    if (prev >= 0) {
+      state.pickerHighlight = prev;
+      renderPickerList();
+    }
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    selectPickerItem(state.pickerHighlight);
+    return;
+  }
+});
+
+// Global shortcut: Cmd+P / Ctrl+P opens picker
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+    e.preventDefault();
+    if (state.pickerOpen) closeProjectPicker();
+    else openProjectPicker();
+  }
+});
+
+// Breadcrumb click → filter by that path segment
+document.addEventListener('click', (e) => {
+  const crumb = e.target.closest('.crumb');
+  if (!crumb) return;
+  const path = crumb.dataset.path || '';
+  if (!path) return;
+  state.projectFilter = path;
+  state.page = 1;
+  refreshPickerButton();
+  showList();
+});
 
 loadConversations();
