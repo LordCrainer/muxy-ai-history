@@ -1255,6 +1255,77 @@ if (typeof muxy !== 'undefined' && muxy.events && muxy.events.subscribe) {
   }
 }
 
+// Observe Muxy project changes and sync the panel filter to the active project.
+// This is the "auto-switch" in the Muxy → extension direction: when the user
+// changes the active project in Muxy, the panel filter follows.
+function setupProjectChangeListener() {
+  if (typeof muxy === 'undefined' || !muxy.events ||
+      typeof muxy.events.subscribe !== 'function') {
+    console.warn('[ai-history] muxy.events.subscribe unavailable; project-change listener not installed');
+    return;
+  }
+
+  // Candidate event names — Muxy docs don't enumerate runtime events. We try
+  // the most common conventions. After the first successful subscribe, skip
+  // the rest to avoid duplicate listeners. When one is confirmed to work in a
+  // user's Muxy version, the others can be removed in a follow-up.
+  const candidates = [
+    'project.changed',
+    'projects.active.changed',
+    'projects.current.changed',
+    'workspace.changed',
+    'repository.changed',
+    'git.changed'
+  ];
+
+  let subscribed = false;
+  for (const eventName of candidates) {
+    try {
+      muxy.events.subscribe(eventName, (event) => {
+        const newPath = event?.project?.path || event?.path || event?.root;
+        console.log(
+          `[ai-history] project-change event (${eventName}): ` +
+          `newPath=${JSON.stringify(newPath)} ` +
+          `currentFilter=${JSON.stringify(state.projectFilter)}`
+        );
+        if (!newPath) {
+          console.log(`[ai-history] ${eventName} fired but no path in payload:`, event);
+          return;
+        }
+        if (newPath === state.projectFilter) return;
+        // If the user is reading a conversation in detail view, do NOT close
+        // the detail view — just sync the filter and re-render. The detail
+        // view will reflect the new filter when the user navigates back.
+        if (state.currentDetail) {
+          state.projectFilter = newPath;
+          refreshPickerButton();
+          renderList();
+        } else {
+          // Normal path: switch to list view and apply the filter.
+          selectProjectAndFilter(newPath);
+        }
+      });
+      if (!subscribed) {
+        console.log(`[ai-history] listener installed via event "${eventName}"`);
+        subscribed = true;
+      } else {
+        console.log(`[ai-history] skip extra event "${eventName}" (already subscribed)`);
+      }
+    } catch (e) {
+      console.warn(`[ai-history] events.subscribe('${eventName}') rejected: ${e.message || e}`);
+    }
+  }
+
+  if (!subscribed) {
+    console.warn(
+      '[ai-history] NO project-change event could be subscribed — listener is a no-op. ' +
+      'Inspect Muxy docs for the correct event name and add it to the candidates list.'
+    );
+  }
+}
+
+setupProjectChangeListener();
+
 // Project picker: button toggles popover
 if (els.projectPicker) {
   els.projectPicker.addEventListener('click', (e) => {
