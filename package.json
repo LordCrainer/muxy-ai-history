@@ -1,6 +1,6 @@
 {
   "name": "ai-history",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -27,6 +27,9 @@
     ],
     "0.8.0": [
       "Auto-switch to the selected project: choosing a project in the picker (or clicking a breadcrumb in the detail view) switches Muxy to that project when a matching one exists. The next resume in terminal then skips the project switch step. The switch is silent (status bar only)."
+    ],
+    "0.8.1": [
+      "Auto-switch (v0.8.0) was too silent: failures (no match, list/switchTo errors) and the already-active case had no UI feedback. Now every outcome emits a status bar message (warn/err/ok) and every step logs a [ai-history] diagnostic line to the console for easy debugging in Muxy DevTools."
     ]
   },
   "muxy": {

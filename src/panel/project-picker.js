@@ -256,10 +256,13 @@ export function findActiveIndex(items, currentFilter) {
 // Behavior:
 //   1. Switches to the list view (hides detail, shows conversations, tabs, filters).
 //   2. Applies the filter synchronously (state.projectFilter, state.page, renderList).
-//   3. Best-effort, SILENT auto-switch to the matching Muxy project via
+//   3. Best-effort auto-switch to the matching Muxy project via
 //      muxy.projects.list → findBestProjectForPath → muxy.projects.switchTo.
-//      The filter is always applied regardless of switch outcome.
-//      Failures are logged via console.warn; the UI stays intact.
+//      The filter is always applied regardless of switch outcome. All outcomes
+//      emit a status bar message (status bar only, no toast) except the
+//      'muxy.projects missing' case which is an environment limitation.
+//      Diagnostic [ai-history] log lines are emitted at each step for the
+//      user to inspect in Muxy DevTools.
 export async function selectProjectAndFilter(deps, path) {
   const {
     state, muxy, els,
@@ -282,20 +285,47 @@ export async function selectProjectAndFilter(deps, path) {
   refreshPickerButton();
   renderList();
 
-  // 3. Auto-switch (best-effort, silent). Filter is already applied.
-  if (!path) return;
+  // 3. Auto-switch (best-effort, always reported). Filter is already applied.
+  if (!path) {
+    console.log('[ai-history] auto-switch skipped: empty path');
+    return;
+  }
   if (typeof muxy === 'undefined' || !muxy.projects ||
-      typeof muxy.projects.list !== 'function') return;
+      typeof muxy.projects.list !== 'function') {
+    console.warn('[ai-history] auto-switch skipped: muxy.projects.list unavailable');
+    return;
+  }
+  let projects;
   try {
-    const projects = await muxy.projects.list();
-    const match = findBestProjectForPath(projects, path);
-    if (!match) return;
-    if (isProjectActive({ muxy, pathInside }, match)) return;
-    if (typeof muxy.projects.switchTo !== 'function') return;
-    const id = match.id || match.name || match.path;
+    projects = await muxy.projects.list();
+  } catch (e) {
+    console.warn('[ai-history] auto-switch: projects.list failed', e);
+    setStatus(`Auto-switch failed: ${e.message || String(e)}`, 'error');
+    return;
+  }
+  const match = findBestProjectForPath(projects, path);
+  if (!match) {
+    console.log(`[ai-history] auto-switch: no Muxy project matches "${path}" (${projects.length} projects available)`);
+    setStatus(`No Muxy project matches ${path}`, 'warn');
+    return;
+  }
+  if (isProjectActive({ muxy, pathInside }, match)) {
+    console.log(`[ai-history] auto-switch: already in ${match.name || match.path}`);
+    setStatus(`Already in ${match.name || match.path}`, 'ok');
+    return;
+  }
+  if (typeof muxy.projects.switchTo !== 'function') {
+    console.warn('[ai-history] auto-switch: muxy.projects.switchTo not a function');
+    setStatus('Auto-switch unavailable: switchTo not exposed', 'error');
+    return;
+  }
+  const id = match.id || match.name || match.path;
+  try {
     await muxy.projects.switchTo(id);
+    console.log(`[ai-history] auto-switch: switched to ${match.name || match.path} (id=${id})`);
     setStatus(`Switched to ${match.name || match.path}`, 'ok');
   } catch (e) {
-    console.warn('[ai-history] auto-switch failed', e);
+    console.warn('[ai-history] auto-switch: switchTo failed', e);
+    setStatus(`Auto-switch failed: ${e.message || String(e)}`, 'error');
   }
 }

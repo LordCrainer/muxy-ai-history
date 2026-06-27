@@ -329,15 +329,14 @@ function countConversationsForProject(projectPath) {
   return state.all.filter((c) => projectMatchesFilter(c.project, projectPath)).length;
 }
 
-function selectPickerItem(index) {
+async function selectPickerItem(index) {
   if (!state.pickerItems) return;
   const item = state.pickerItems[index];
   if (!item) return;
   if (item.kind === 'project-header' || item.kind === 'path-header') return;
   closeProjectPicker();
-  // Fire-and-forget: the helper applies the filter synchronously and
-  // performs the best-effort auto-switch asynchronously.
-  selectProjectAndFilter(item.value || '');
+  // Awaited so the status bar updates before the user moves on.
+  await selectProjectAndFilter(item.value || '');
 }
 
 // Thin wrapper that injects the real DOM, Muxy, and state deps. Kept

@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-27
+
+### Fixed
+- Auto-switch (v0.8.0) was too silent. The only feedback was a status bar message on success; the already-active case, the no-match case, and the error cases were completely silent. Every outcome now emits a status bar message (warn / err / ok) and every step of the auto-switch flow logs a `[ai-history]` diagnostic line to the console, so the user can see what happened in Muxy DevTools without having to guess.
+
 ## [0.8.0] - 2026-06-27
 
 ### Added

@@ -543,7 +543,8 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
     check('valid+match+active: projects.list called', muxy.calls.filter((c) => c.key === 'projects.list').length === 1);
     check('valid+match+active: projects.switchTo NOT called',
       muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
-    check('valid+match+active: setStatus NOT called', statuses.length === 0);
+    check('valid+match+active: setStatus called with "Already in <name>"',
+      statuses.some((s) => s.text === 'Already in muxy-ext' && s.kind === 'ok'));
   }
 
   // 6.4 — valid path + NO matching project → list called, switchTo NOT called
@@ -558,7 +559,8 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
     check('no-match: projects.switchTo NOT called',
       muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
     check('no-match: renderList still called', counts.renderList === 1);
-    check('no-match: setStatus NOT called', statuses.length === 0);
+    check('no-match: setStatus called with "No Muxy project matches <path>"',
+      statuses.some((s) => s.text === 'No Muxy project matches /Users/x/Repos/muxy-ext' && s.kind === 'warn'));
   }
 
   // 6.5 — muxy undefined: only state updated, no list call
@@ -581,12 +583,14 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
   // 6.7 — projects.list throws: filter still applied, no switchTo
   {
     const muxy = createAutoSwitchMuxy({ listThrows: true });
-    const { deps, state, counts } = makeDeps({ muxy });
+    const { deps, state, counts, statuses } = makeDeps({ muxy });
     await selectProjectAndFilter(deps, '/some/path');
     check('list-throws: state.projectFilter updated', state.projectFilter === '/some/path');
     check('list-throws: renderList called', counts.renderList === 1);
     check('list-throws: projects.switchTo NOT called',
       muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
+    check('list-throws: setStatus called with err kind',
+      statuses.some((s) => s.kind === 'error' && s.text.startsWith('Auto-switch failed:')));
   }
 
   // 6.8 — projects.switchTo throws: filter still applied, no setStatus
@@ -601,7 +605,9 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
     check('switchTo-throws: state.projectFilter updated', state.projectFilter === PROJ);
     check('switchTo-throws: projects.switchTo was called (then threw)',
       muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 1);
-    check('switchTo-throws: no success setStatus emitted', statuses.length === 0);
+    check('switchTo-throws: setStatus called with err kind (not ok)',
+      statuses.some((s) => s.kind === 'error' && s.text.startsWith('Auto-switch failed:')) &&
+      !statuses.some((s) => s.kind === 'ok'));
   }
 
   // 6.9 — setStatus called with project name on successful switch
@@ -617,7 +623,7 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
       statuses.some((s) => s.text === 'Switched to cool-tool'));
   }
 
-  // 6.10 — setStatus NOT called when project is already active (no toast/status)
+  // 6.10 — setStatus called with "Already in <name>" when project is already active
   {
     const PROJ = '/Users/x/Repos/already-active';
     const muxy = createAutoSwitchMuxy({
@@ -625,8 +631,8 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
     });
     const { deps, statuses } = makeDeps({ muxy, isActive: true });
     await selectProjectAndFilter(deps, PROJ);
-    check('already-active: setStatus NOT called', statuses.length === 0,
-      `got ${statuses.length} status(es): ${JSON.stringify(statuses)}`);
+    check('already-active: setStatus called with "Already in <name>"',
+      statuses.some((s) => s.text === 'Already in already-active' && s.kind === 'ok'));
   }
 
   // 6.11 — DOM toggling: detail hidden, conversations/filters/tabs unhidden
@@ -670,6 +676,27 @@ console.log('\n6. selectProjectAndFilter (auto-switch)');
       check('fallback id: no `id` or `name` → uses `path`',
         switchCalls.length > 0 && switchCalls[0].id === PROJ, `got ${JSON.stringify(switchCalls[0])}`);
     }
+  }
+
+  // 6.13 — setStatus text for "already active" when match has only `path` (no `name`)
+  {
+    const PROJ = '/Users/x/Repos/noname-active';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p10', path: PROJ, isActive: true }]
+    });
+    const { deps, statuses } = makeDeps({ muxy, isActive: true });
+    await selectProjectAndFilter(deps, PROJ);
+    check('already-active (no name): setStatus uses path fallback',
+      statuses.some((s) => s.text === `Already in ${PROJ}` && s.kind === 'ok'));
+  }
+
+  // 6.14 — setStatus text for "no match" includes the full path
+  {
+    const muxy = createAutoSwitchMuxy({ projectsListResult: [] });
+    const { deps, statuses } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '/Users/x/Repos/totally-unknown');
+    check('no-match (empty list): setStatus uses warn kind',
+      statuses.some((s) => s.kind === 'warn' && s.text === 'No Muxy project matches /Users/x/Repos/totally-unknown'));
   }
 }
 
