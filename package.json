@@ -1,17 +1,30 @@
 {
   "name": "ai-history",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
     "build:surfaces": "vite build",
-    "test": "node tests/test-parsers.mjs && node tests/test-chunked-write.mjs && node tests/test-open-in-terminal.mjs",
-    "test:oit": "node tests/test-open-in-terminal.mjs"
+    "test": "node tests/test-parsers.mjs && node tests/test-chunked-write.mjs && node tests/test-open-in-terminal.mjs && node tests/test-project-picker.mjs",
+    "test:oit": "node tests/test-open-in-terminal.mjs",
+    "test:picker": "node tests/test-project-picker.mjs"
   },
   "devDependencies": {
     "vite": "^7.3.5"
+  },
+  "changelog": {
+    "0.7.0": [
+      "Project picker menu with search, replacing the static <select> dropdown",
+      "Click on a conversation now resumes the session in a terminal; Cmd/Ctrl+Click opens the detail view",
+      "Breadcrumb navigation in the detail view (clickable to filter by subpath)",
+      "Path abbreviation with ~ for $HOME in conversation list",
+      "Copy path action in the 3-dot menu",
+      "Cmd+P / Ctrl+P global shortcut to open the project picker",
+      "Project detection fix: cache invalidation on refresh, ~ and $HOME expansion in OpenCode sessions",
+      "Removed 'Open in Terminal' from the 3-dot menu (now the primary click action)"
+    ]
   },
   "muxy": {
     "$schema": "https://raw.githubusercontent.com/muxy-app/muxy/main/docs/extensions/schema/manifest.schema.json",
