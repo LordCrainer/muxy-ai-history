@@ -1,55 +1,63 @@
-# AI History - Muxy Extension
+# AI History — Muxy Extension
 
-Visualiza el historial de conversaciones de **Claude Code** y **OpenCode** dentro de Muxy.
+A unified viewer for Claude Code and OpenCode session history inside Muxy.
 
-> 📋 Para la spec completa (todos los helpers, formatos, troubleshooting, API detallada): **[FEATURES.md](./FEATURES.md)**
+## Overview
 
-## Características
+AI History reads the on-disk session stores of Claude Code and OpenCode and exposes them as a single, searchable list inside Muxy's right-side panel. Each card represents one conversation; the user can resume the session in a terminal, view its messages, rename it, export it as Markdown, or copy the project path. Custom titles, project filtering, and subpath navigation are all handled client-side with no background services and no network calls.
 
-- **Lista unificada** de conversaciones de Claude Code y OpenCode
-- **Filtros** por proveedor (All / Claude / OpenCode) y por proyecto
-- **Dropdown de proyectos** agrupado:
-  - `Git repos` (arriba): basename del toplevel (e.g. `muxy-extensions`)
-  - `Other paths` (abajo): ruta completa, dedupeada
-  - Subpath match: si tu proyecto está en un subdir de un repo git, el filtro del repo raíz lo incluye
-- **Búsqueda** en tiempo real por título, contenido y proyecto
-- **Paginación** con botón "Load more" (50 por página)
-- **Vista de detalle** con todos los mensajes de la conversación
-- **Renderizado** de código, negrita, itálica
-- **Menú 3-dot** por conversación con submenú Export:
-  - **View** — abre la vista de detalle
-  - **Open in Terminal** (v0.6) — smart routing:
-    1. Switch al Muxy project que contiene la conversación
-    2. Switch al Muxy worktree que contiene la conversación
-    3. Reusa una terminal tab existente si ya apunta al directorio
-    4. Abre nueva terminal con `claude --resume <id>` / `opencode -s <id>` y `cd <dir>` wrapping
-    5. Fallback al cwd default si Muxy rechaza `directory`
-  - **Export ▶** — submenú con:
-    - **Copy to Clipboard** — copia al portapapeles (Clipboard API, fallback a `pbcopy`)
-    - **Save as Markdown…** — abre un modal centrado con preview del markdown (max 500px + scroll) y botón Save… que dispara el download nativo del browser → file picker del OS
-  - **Rename** — inline edit; para OpenCode actualiza SQLite, para Claude usa sidecar JSON
-- **Atajo de teclado**: `Cmd+Shift+H` para abrir/cerrar el panel
-- **Icono en topbar** para acceso rápido
+## Features
 
-## Estructura
+### Browse
+- Unified list of Claude Code and OpenCode sessions
+- Filter by provider (All / Claude / OpenCode)
+- Filter by project via a searchable popover, grouped as **Projects** (git repos) and **Paths** (non-git)
+- Real-time search across title, message content, and project path
+- Pagination at 50 sessions per page with a "Load more" affordance
+
+### Interact
+- Primary click on a card resumes the session in a terminal (smart routing — reuses an existing tab if one is open)
+- Cmd/Ctrl+Click opens the message detail view
+- 3-dot menu on each card: **View**, **Copy path**, **Export** (Copy / Save as Markdown), **Rename**
+- Clickable breadcrumb in the detail view — clicking any segment filters the list to that subpath
+
+### Modify
+- Rename a session inline; writes through to the source (SQL for OpenCode, sidecar JSON for Claude Code)
+- Export as Markdown: copy to the clipboard, or save as a `.md` file via the native OS file picker
+- Copy the absolute project path to the clipboard
+
+### UX details
+- Paths under `$HOME` are shown with a `~` prefix; the absolute path is in the tooltip (`title` attribute)
+- Custom titles override the default per session and persist
+
+## How it works
+
+When the panel opens, AI History reads the data sources for both providers and parses them into a single list of conversation objects. Claude Code's JSONL files are read with `cat`; OpenCode's SQLite store is read with `sqlite3`. After that initial read, the list is filtered, searched, and sorted in memory; no further disk I/O happens until the user takes an action (view, rename, export, or resume).
+
+All I/O goes through Muxy's `muxy.exec` shim — there is no Node binding, no background daemon, and no network access. The panel runs entirely in Muxy's right-side panel sandbox; the host process only sees the API calls listed in [API used](#api-used).
+
+## Project structure
 
 ```
 ai-history/
-├── package.json              # Manifest de Muxy
-├── vite.config.js            # Build config con plugin fixup-output
+├── package.json                   # Muxy manifest (commands, permissions, panel config)
+├── vite.config.js                 # Vite build config with the fixup-output plugin
 ├── src/
 │   ├── panel/
-│   │   ├── panel.html        # Entry HTML
-│   │   ├── main.js           # UI logic + I/O via muxy.exec
-│   │   ├── utils.js          # Funciones puras (format, escape, paginate, etc.)
-│   │   └── styles.css        # Estilos dark theme
+│   │   ├── panel.html             # Entry HTML (button, popover, modal containers)
+│   │   ├── main.js                # UI logic, state, I/O orchestration, event wiring
+│   │   ├── utils.js               # Pure helpers (format, escape, project grouping, home expansion)
+│   │   ├── open-in-terminal.js    # Smart routing logic (deps-injected, testable in isolation)
+│   │   ├── project-picker.js      # Pure helpers for the project picker popover
+│   │   └── styles.css             # Dark theme styles (panel, cards, menu, picker, modal)
 │   └── assets/
-│       └── icon.svg
+│       └── icon.svg               # Topbar icon
 ├── tests/
-│   ├── test-parsers.mjs          # 407 smoke tests
-│   ├── test-chunked-write.mjs    # 20 integration tests (round-trip base64)
-│   └── test-open-in-terminal.mjs # 72 tests (12 CA A-L + 4 shell escape + 4 manifest)
-└── dist/                     # Output del build
+│   ├── test-parsers.mjs           # Source and bundle smoke tests
+│   ├── test-chunked-write.mjs     # Round-trip of the chunked base64 writer
+│   ├── test-open-in-terminal.mjs  # 12 acceptance criteria for the routing logic
+│   └── test-project-picker.mjs    # The 5 pure helpers in project-picker.js
+└── dist/                          # Vite build output + copied manifest
     ├── panel.html
     ├── package.json
     ├── icon.svg
@@ -58,191 +66,149 @@ ai-history/
         └── panel-*.css
 ```
 
-## Fuentes de datos
+## Data sources
 
-- **Claude Code**: `~/.claude/projects/<encoded-path>/<session-id>.jsonl` (JSONL, una línea por mensaje)
-- **OpenCode**: `~/.local/share/opencode/opencode.db` (SQLite)
-  - `session` table: `id, title, directory, time_created, time_updated, ...`
-  - `message` + `part` tables: mensajes con parts de tipo text/tool/reasoning
+| Provider    | Path                                       | Format  |
+| ----------- | ------------------------------------------ | ------- |
+| Claude Code | `~/.claude/projects/<encoded>/<id>.jsonl`  | JSONL   |
+| OpenCode    | `~/.local/share/opencode/opencode.db`      | SQLite  |
 
-## Custom titles storage
+Claude Code encodes project paths in its directory names (`-Users-x-Repos-ac` for `/Users/x/Repos/ac`); the extension decodes them back with `decodeClaudeProject`. OpenCode stores sessions in three tables — `session` (id, title, directory, timestamps), `message` (one row per message), and `part` (one row per text, tool, or reasoning fragment) — which the panel joins in a single `sqlite3 -json` query.
 
-- **OpenCode**: modifica directamente `session.title` en SQLite. Persiste, visible en otros clients.
-- **Claude Code**: sidecar JSON porque Claude no tiene campo title editable.
-  - Path: `~/.config/muxy/extensions/ai-history/custom-titles.json`
-  - Formato: `{"claude:<session-id>": "new title"}`
+## Custom titles
 
-## API usada (muxy directo desde panel)
+- **OpenCode** — the new title is written directly to `session.title` via a SQL `UPDATE`. The change persists immediately and is visible in any other client that reads the same SQLite file.
+- **Claude Code** — Claude has no editable title field, so the extension uses a sidecar JSON file at `~/.config/muxy/extensions/ai-history/custom-titles.json`. The format is `{"claude:<session-id>": "new title"}`. Deleting the sidecar reverts all custom titles.
 
-- `muxy.exec(["/bin/cat", file])` — leer JSONL / sidecar
-- `muxy.exec(["/usr/bin/sqlite3", "-json", db, sql])` — query OpenCode
-- `muxy.exec(["/usr/bin/sqlite3", db, updateSql])` — rename OpenCode
-- `muxy.exec(["/bin/mkdir", "-p", dir])` — crear export dir
-- `muxy.exec(["/bin/sh", "-c", "printf '%s' '...' >> /tmp/..."])` — chunked base64 writes
-- `muxy.exec(["/bin/sh", "-c", "base64 -d < /tmp/... > PATH"])` — decode + write final
-- `muxy.exec(["/usr/bin/open", "-R", path])` — reveal en Finder
-- `muxy.git.repoInfo()` — validar que el proyecto está dentro del worktree activo antes de `tabs.open`
-- `muxy.tabs.list()` / `muxy.tabs.switchTo(id)` / `muxy.tabs.open({kind, command, directory})` — abrir o reusar terminal
-- `muxy.toast({title, body, variant})` — notificaciones
-- `muxy.events.subscribe('command.refresh-history', ...)` — refresh desde menú
-- `navigator.clipboard.writeText(markdown)` — Copy as Markdown (fallback a `pbcopy` chunked)
+## Resume in terminal
 
-## Permisos del manifest
+The smart routing lives in `src/panel/open-in-terminal.js`. When the user clicks a card, AI History:
 
-```json
-"permissions": [
-  "panels:write",        // panel UI
-  "notifications:write", // toasts
-  "tabs:write",          // abrir terminal tabs (Open in Terminal)
-  "git:read",            // muxy.git.repoInfo() para inferir active project (fallback)
-  "projects:write",      // muxy.projects.list() + switchTo() para abrir en el cwd correcto
-  "commands:exec"        // muxy.exec shell (cat, sqlite3, mkdir, printf, base64, pbcopy, git, etc.)
-]
-```
+1. Looks up the absolute project directory from the conversation record.
+2. Checks `muxy.tabs.list()` and switches to an existing terminal if one is already in that directory.
+3. Calls `muxy.projects.list()` and uses `findBestProjectForPath` to pick the most specific Muxy project that contains the conversation; switches to it if not active.
+4. Calls `muxy.worktrees.list()` (with `muxy.git.worktrees()` as fallback), finds the worktree whose path contains the conversation, and switches to it — then re-reads `muxy.git.repoInfo()` to verify the switch actually took effect.
+5. Opens a new terminal tab with `claude --resume <id>` (Claude Code) or `opencode -s <id>` (OpenCode) wrapped in a `cd "<projectDir>" && ...` shell expression. If Muxy rejects the `directory` parameter, the flow falls back to opening in the active Muxy project's cwd.
 
-## Notas sobre consent prompts
+The same flow is used whether the trigger is the primary click on a card or the (legacy) "Open in Terminal" menu item.
 
-Cada llamada a `muxy.exec` puede mostrar un diálogo **"Allow this command to run?"** la primera vez que se invoca. Para minimizar prompts:
+## Project picker
 
-- **Haz click en "Allow & remember"** la primera vez que exportes / copies una conversación. Muxy recordará ese patrón de comando y no volverá a preguntar.
-- El writer chunked (v0.3.1) emite varios `printf '%s' '...' >> tmp` consecutivos. Si bien cada chunk es un comando distinto, todos comparten la misma forma; aceptando "Allow & remember" en el primero, el resto suele pasar sin prompt adicional.
-- Si el diálogo se vuelve molesto, podés revocar permisos en Settings → Extensions → AI History → Reset consent.
+The project filter is a popover anchored to a button in the list header. It groups projects into **Projects** (git repos, deduped by toplevel) and **Paths** (non-git absolute paths), and shows a session count next to each entry. The search field is case-insensitive and matches against label, display path, and toplevel. The list is keyboard-navigable: `↑/↓` move the highlight, `Enter` selects, `Esc` closes, and headers are skipped during navigation. `Cmd+P` / `Ctrl+P` toggles the popover from anywhere — the panel does not need focus.
 
-## v0.6.2 — Permission fix + mini-refactor
+## Path abbreviation
 
-User reportó que "Open in Terminal" no switchaba el Muxy project/worktree (solo abría terminal con `cd <dir>` wrapping). El log de v0.6.1 reveló el bug en el primer run: **faltaban los permisos `:read` en el manifest**.
+Paths under `$HOME` are rendered with a `~` prefix to reduce visual noise (for example, `/Users/x/Repos/ac` shows as `~/Repos/ac`); the absolute path is still present as a `title` attribute and surfaces as a native browser tooltip on hover. The two helpers `abbreviateHome` and `expandHome` in `src/panel/utils.js` are mirror functions: the first collapses `$HOME` prefixes, the second expands `~`, `~/`, and `$HOME` back to absolute paths. `expandHome` is also used internally to normalize OpenCode session directories before the smart routing logic runs, because some rows store the directory as `~/foo` rather than an absolute path.
 
-**Causa raíz**: Muxy distingue `read` y `write` como permisos separados. El manifest tenía `tabs:write` y `projects:write` (para `open()` y `switchTo()`), pero faltaban `tabs:read` y `projects:read` (para `list()`). El código llamaba `muxy.tabs.list()` y `muxy.projects.list()` que devolvían `permission denied (tabs:read)` / `(projects:read)`. El flujo caía al branch de "no match" y abría una terminal sin switchear nada.
+## Privacy
 
-**Fix** (2 líneas en `package.json`):
+- **Reads from** `~/.claude/projects/` (Claude Code) and `~/.local/share/opencode/opencode.db` (OpenCode).
+- **Writes to** `~/.config/muxy/extensions/ai-history/custom-titles.json` (the Claude Code custom-titles sidecar) and in-place to OpenCode's SQLite (for OpenCode renames).
+- **Network:** zero outbound network calls. No telemetry, no analytics, no remote logging.
+- All processing happens in the panel browser process (the Muxy sandbox); no data leaves the host.
+- Permissions are scoped (see [Manifest permissions](#manifest-permissions)) and explicitly listed in the extension manifest.
+- No data is shared with third parties. The user is the only consumer.
 
-```diff
-   "permissions": [
-     "panels:write",
-     "notifications:write",
-+    "tabs:read",
-     "tabs:write",
-     "git:read",
-+    "projects:read",
-     "projects:write",
-     "commands:exec"
-   ],
-```
+## Manifest permissions
 
-**Refactor menor**: `openInTerminal` se extrajo de `main.js` a `src/panel/open-in-terminal.js` con deps inyectadas (`muxy`, `toast`, `setStatus`, `state`, `log`, helpers). El wrapper en `main.js` pasa el `muxy` real; los tests inyectan mocks. Esto habilita los 12 tests CA A-L sin tocar Muxy.
+| Permission                       | Why it is needed                                       |
+| -------------------------------- | ------------------------------------------------------ |
+| `panels:write`                   | Render the panel UI                                    |
+| `notifications:write`            | Toast notifications (action feedback)                  |
+| `tabs:read`, `tabs:write`        | Open or reuse terminal tabs                            |
+| `git:read`                       | Detect the active worktree (for `tabs.open`)           |
+| `projects:read`, `projects:write`| Switch to the project that owns the session            |
+| `commands:exec`                  | `cat`, `sqlite3`, `mkdir`, `printf`, `base64`, `pbcopy`, `git` |
 
-**Bugfix pre-existente** (expuesto por los tests): el pre-check log de API availability crasheaba con `TypeError` si `muxy.git.worktree` era undefined (usaba `typeof x && typeof x.y` que no short-circuita porque `typeof undefined` es la string `"undefined"`, truthy). Cambiado a `typeof x?.y`.
+## Manifest commands
+- `toggle-history` (Cmd+Shift+H) — open or close the panel
+- `refresh-history` — reload the session list (command palette only)
 
-**Tests**: 499/499 pass (407 + 20 + 72). `npm test` corre los 3 suites; `npm run test:oit` corre solo los 12 CA A-L nuevos. Los tests mockean la Muxy API completamente con un programmable factory (`muxy.on('git.repoInfo', () => { ... })`), y assertan:
-- Cuáles API calls se hicieron y en qué orden
-- Los args correctos (positional `[name, projectId]` para `muxy.worktrees.switchTo`, object `{identifier}` para `muxy.git.worktree.switchTo`)
-- Que `git.repoInfo` se llamó ≥2 veces cuando hubo switch (verify pass)
-- Los toasts y statuses emitidos
-- Los log calls de cada step (CA K)
+## API used
 
-El test CA F (worktree match, not active) es el test "anti-regresión" principal: asserta que la verify pass corrió y que el switch fue posicional. Si alguien rompe la API shape o quita el verify pass en el futuro, este test falla.
+Grouped by purpose. The exact list is enumerated in `src/panel/main.js`.
 
-**Después de upgrade**: recargá Muxy, aceptá los 2 consent prompts nuevos (`tabs:read`, `projects:read`), y reintentá "Open in Terminal" en un worktree no activo. El log ahora debería mostrar todo el flujo: `step=1 tabs.list() returned N → step=3 projects.list() returned N → step=4 projects.switchTo ok → step=5 worktrees.list returned N → step=6 switch VERIFIED → step=7 tabs.open ok`.
+- **File / shell I/O** — `muxy.exec(["/bin/cat", file])` for JSONL, `muxy.exec(["/usr/bin/sqlite3", "-json", db, sql])` for OpenCode queries, `muxy.exec(["/usr/bin/sqlite3", db, updateSql])` for OpenCode renames, `muxy.exec(["/bin/mkdir", "-p", dir])` for export directories, chunked `muxy.exec(["/bin/sh", "-c", "printf '%s' '...' >> /tmp/..."])` followed by `muxy.exec(["/bin/sh", "-c", "base64 -d < /tmp/... > PATH"])` for large writes.
+- **Projects** — `muxy.projects.list()`, `muxy.projects.switchTo(identifier)`.
+- **Worktrees** — `muxy.worktrees.list({ project })`, `muxy.worktrees.switchTo(identifier, project)`; fallback to `muxy.git.worktrees()` and `muxy.git.worktree.switchTo({ identifier })`.
+- **Git** — `muxy.git.repoInfo()` to detect the active worktree.
+- **Tabs** — `muxy.tabs.list()`, `muxy.tabs.switchTo(idOrIndex)`, `muxy.tabs.open({ kind, command, directory, singleton })`.
+- **UI** — `muxy.toast({ title, body, variant })` (variant: `info` | `error` | `success` | `warn`); `muxy.events.subscribe('command.refresh-history', ...)` for palette-driven refresh.
+- **Browser** — `navigator.clipboard.writeText(text)` for the clipboard actions.
 
-## v0.6.1 — Diagnostic logging for Open in Terminal
+## Development
 
-User reported that "Open in Terminal" only opened a new terminal with `cd <dir>` wrapping, without switching the active Muxy project/worktree. Root cause was unclear, so I added **detailed tagged logging** in every step of `openInTerminal` to diagnose what's actually happening at runtime.
+The project uses [bun](https://bun.sh) for package management and script
+execution. `bun.lock` is the source of truth; `package-lock.json` is kept for
+npm users but is regenerated as a side effect.
 
-All logs are tagged `[openInTerminal]` and emitted via two helpers (`olog` / `owarn`) so they are easy to grep in Muxy's extension log file.
-
-**What gets logged:**
-
-- `step=0` — start (provider, id, resolved projectDir, resumeCmd)
-- `step="pre"` — API availability matrix (e.g. `muxy.tabs.open=function muxy.projects=undefined muxy.worktrees.list=function muxy.git.worktree.switchTo=function`)
-- `step=1` — `tabs.list()` returns N tab(s), first tab keys, existingTab match
-- `step=2` — `tabs.switchTo(existingTab)` ok/fail
-- `step=3` — `projects.list()` returns N, first project keys, projects sample, `findBestProjectForPath` match
-- `step="3b"` — project NOT in Muxy, opening new workspace
-- `step=4` — `isProjectActive` check, `projects.switchTo(id)` ok/fail
-- `step=5` — `worktrees.list()` (or `git.worktrees()`) returns N, worktree keys, worktrees sample
-- `step=6` — `findBestWorktreeForPath` match, `muxy.git.repoInfo()`, `isWorktreeActive` decision, `worktrees.switchTo(identifier, project)` (positional, app-level) **or** `git.worktree.switchTo({identifier})` (object, git-level) ok/fail, **plus a verify pass** that re-reads `repoInfo()` to confirm the switch actually took effect
-- `step=7` — `tabs.open({directory, command})` ok/fail, with fallback to command-only
-- `step="7b"` — no matching worktree, opening new workspace
-- `step="fallback"` — no projectDir, opening command-only
-
-**Key fixes found while adding the logging** (and the reason this version is v0.6.1, not v0.7):
-
-1. **`muxy.worktrees.switchTo(identifier, project)`** — positional args (was `{ project: projectId }`)
-2. **`muxy.git.worktree.switchTo({ identifier })`** — object form (was bare string)
-3. **Verify pass after switch** — re-read `repoInfo()` to confirm the worktree actually changed
-
-**Tests**: 407 smoke + 20 integration = 427/427 pass.
-
-## v0.6 — Refined Open in Terminal
-
-"Open in Terminal" ahora **verifica si el proyecto ya está abierto** antes de abrir uno nuevo:
-
-1. **`tabs.list()`** → busca terminal ya en el directorio (o subdirectorio); si existe, **`tabs.switchTo()`** y termina
-2. **`projects.list()`** → verifica si el proyecto está en Muxy; si no está, abre nuevo workspace
-3. **`projects.switchTo()`** → si el proyecto existe pero no está activo
-4. **`worktrees.list()`** (o fallback a `git.worktrees()`) → busca el worktree que contiene la conversación
-5. **`worktrees.switchTo()`** → si hay worktree match y no está activo
-6. **`tabs.open()`** → abre terminal en el worktree correcto con `cd "<dir>"` wrapping
-
-Resultado: un solo click te lleva **al tab existente** si ya está abierto, o **abre nuevo workspace** en el worktree correcto con la terminal lista para `claude --resume` o `opencode -s`.
-
-**Nuevas utilidades puras** en `utils.js` (testeables sin Muxy):
-- `findBestWorktreeForPath(worktrees, targetPath)` — longest-prefix match entre worktrees
-- `isWorktreeActive(worktree, activePath)` — chequea `isActive` field con fallback a path match
-
-**FEATURES.md**: spec exhaustiva (UI, helpers, formatos, troubleshooting, API completa).
-
-**Tests**: 357 smoke + 20 integration = 377/377 pass.
-
-## v0.3.1 Bugfixes
-
-- **#1 Open in Terminal**: Muxy rechazaba `directory` si no estaba dentro del worktree activo. Ahora se hace **try con `directory` y fallback sin `directory`**: si Muxy rechaza, retry sin el param y se abre en el cwd default (active Muxy project). Toast informativo indica que el cwd es el default.
-- **#2 Copy as Markdown**: El `printf '%s' ${JSON.stringify(markdown)}` tenía problemas de escape en el shell. Ahora se escribe a `/tmp` en chunks de base64 y luego `pbcopy < tmp`.
-- **#3 Save as Markdown**: El heredoc con todo el markdown colgaba Muxy. Ahora se usa base64 chunked + `base64 -d` (testeado con 1MB de Unicode + shell-special chars). En v0.4, la exportación usa el modal + download nativo.
-- **#4 Proyecto duplicado**: El mismo repo podía aparecer dos veces en el dropdown (Claude encoded vs OpenCode absolute) o como N entries si tenías subdirs. Ahora `projectDisplayGroups` deduplica por toplevel y `extractRepoLabel` sube por los parents.
-
-## v0.5 — Auto-switch Muxy project
-
-El fallback del v0.3.1 (abrir sin `directory`) dejaba la terminal en el cwd del Muxy project activo, no en la ruta de la conversación. Ahora:
-
-1. `muxy.projects.list()` → busca el Muxy project que **contiene** la ruta de la conversación (path más específico gana)
-2. Si el match no es el active project → `muxy.projects.switchTo(match.id)` (con toast "Switched project → <name>")
-3. `muxy.tabs.open({directory, command})` ahora funciona porque el active worktree ES el match
-4. Si no hay match (la carpeta no es un Muxy project) → toast informativo y abre sin directory
-
-Nuevas utilidades puras en `utils.js` (testeables):
-- `pathInside(child, parent)` — match estricto con separador `/` (evita `/foo/barx` matching `/foo/bar`)
-- `findBestProjectForPath(projects, targetPath)` — pick longest match, soporta `path`/`root`/`directory`/`worktree` como field names
-
-Permiso nuevo: `projects:write`.
-
-## v0.4 — Export modal con preview
-
-El botón "Export" antes abría un sub-menú con Copy/Save directo a `~/Downloads/ai-history/`. Ahora abre un **modal centrado** con:
-
-- **Preview del markdown** en un área scrolleable con `max-height: 500px` (no se expande más allá)
-- **Botón Copy** — copia al portapapeles
-- **Botón Save…** — usa `Blob` + `<a download>` para disparar el file picker nativo del OS (Finder) y dejar al usuario elegir destino
-- **Botón ×** o **Esc** o **click en backdrop** para cerrar
-
-El modal reusa el markdown ya cargado (no re-lee el JSONL) para que el preview sea instantáneo.
-
-## Desarrollo
+### Setup
 
 ```bash
-npm install
-npm run dev                       # Vite dev server en :5173
-npm run build                     # Genera dist/
-node tests/test-parsers.mjs       # 220 smoke tests
-node tests/test-chunked-write.mjs # 20 integration tests (round-trip base64)
+git clone <repo>
+cd ai-history
+bun install
 ```
 
-## Instalación
+> If you do not have bun, `npm install` works too — both lockfiles are
+> committed and the scripts are runtime-agnostic.
 
-El manifest de Muxy detecta automáticamente la extensión en `~/.config/muxy/extensions/ai-history/`. Reinicia Muxy para que cargue.
+### Run
 
-## Atajos de teclado
+- `bun run dev` — Vite dev server on port 5173
+- `bun run build` — produces `dist/` (Vite bundle + manifest copy)
+- `bun run test` — runs all 4 test suites (613 tests)
+- `bun run test:oit` — runs only the `open-in-terminal` suite
+- `bun run test:picker` — runs only the `project-picker` suite
 
-- `Cmd+Shift+H` — toggle del panel
-- `Esc` — cerrar menú 3-dot o cancelar rename
-- `Enter` en input de rename — guardar
+> Equivalents for npm users: `npm run dev`, `npm run build`, `npm test`, etc.
+
+### Architecture
+- `src/panel/main.js` — UI logic, state management, I/O orchestration, and event wiring. Imports the pure helpers from `utils.js` and `project-picker.js`, and the dependency-injected routing function from `open-in-terminal.js`.
+- `src/panel/utils.js` — pure helpers (formatting, escaping, project grouping, `~`-expansion, path matching, worktree selection). No DOM access, no Muxy API references; safe to import from Node tests.
+- `src/panel/open-in-terminal.js` — the smart routing logic. All Muxy API access and side effects are injected via a `deps` object so the module is unit-testable in isolation.
+- `src/panel/project-picker.js` — pure helpers for the project picker popover: `filterGroups`, `getPickerLabel`, `buildPickerItems`, `matchItem`, `findActiveIndex`.
+- `src/panel/panel.html` — entry HTML (button, popover, modal containers).
+- `src/panel/styles.css` — dark theme styles for the panel, cards, menu, picker, breadcrumb, and modal.
+
+## Keyboard shortcuts
+
+| Shortcut               | Action                                  |
+| ---------------------- | --------------------------------------- |
+| Cmd+Shift+H            | Toggle the panel                        |
+| Cmd+P / Ctrl+P         | Open the project picker (global)        |
+| Esc                    | Close popover, menu, or modal           |
+| Enter (in rename)      | Save the new title                      |
+| Cmd/Ctrl+Click on card | Open the message detail view            |
+
+## Troubleshooting
+
+| Issue                                  | Fix                                                |
+| -------------------------------------- | -------------------------------------------------- |
+| "permission denied" on first run       | Reload the extension and accept the consent prompt |
+| "Allow this command to run?" each time | Click "Allow & remember" on the first prompt       |
+| OpenCode rename not visible elsewhere  | Expected — OpenCode uses direct SQL updates       |
+| Custom title missing in Claude         | Verify the sidecar file is not corrupted           |
+
+For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in Muxy's extension log and search for the `[openInTerminal]` tag.
+
+## Tests
+
+613 tests across 4 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+
+| Suite                              | Tests | What it covers                                |
+| ---------------------------------- | ----- | --------------------------------------------- |
+| `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                 |
+| `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer       |
+| `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic  |
+| `tests/test-project-picker.mjs`    | 97    | The 5 pure helpers in `project-picker.js`      |
+
+The routing tests use a programmable Muxy mock factory (`createMuxyMock()`) that records every API call and lets you inject responses per key, so no real Muxy host is required.
+
+## Bundle size
+
+~42KB raw / ~13KB gzipped. Vite + vanilla JS, no frameworks.
+
+## License
+
+See [LICENSE](./LICENSE).
