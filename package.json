@@ -1,6 +1,6 @@
 {
   "name": "ai-history",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,6 +24,9 @@
       "Cmd+P / Ctrl+P global shortcut to open the project picker",
       "Project detection fix: cache invalidation on refresh, ~ and $HOME expansion in OpenCode sessions",
       "Removed 'Open in Terminal' from the 3-dot menu (now the primary click action)"
+    ],
+    "0.8.0": [
+      "Auto-switch to the selected project: choosing a project in the picker (or clicking a breadcrumb in the detail view) switches Muxy to that project when a matching one exists. The next resume in terminal then skips the project switch step. The switch is silent (status bar only)."
     ]
   },
   "muxy": {
@@ -76,7 +79,10 @@
     "marketplace": {
       "author": "LordCrainer",
       "github": "LordCrainer",
-      "categories": ["productivity", "ai"]
+      "categories": [
+        "productivity",
+        "ai"
+      ]
     }
   }
 }

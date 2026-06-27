@@ -158,7 +158,7 @@ bun install
 
 - `bun run dev` — Vite dev server on port 5173
 - `bun run build` — produces `dist/` (Vite bundle + manifest copy)
-- `bun run test` — runs all 4 test suites (613 tests)
+- `bun run test` — runs all 4 test suites (654 tests)
 - `bun run test:oit` — runs only the `open-in-terminal` suite
 - `bun run test:picker` — runs only the `project-picker` suite
 
@@ -195,14 +195,14 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 
 ## Tests
 
-613 tests across 4 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+654 tests across 4 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 | Suite                              | Tests | What it covers                                |
 | ---------------------------------- | ----- | --------------------------------------------- |
 | `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                 |
 | `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer       |
 | `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic  |
-| `tests/test-project-picker.mjs`    | 97    | The 5 pure helpers in `project-picker.js`      |
+| `tests/test-project-picker.mjs`    | 138   | The 5 pure helpers in `project-picker.js`      |
 
 The routing tests use a programmable Muxy mock factory (`createMuxyMock()`) that records every API call and lets you inject responses per key, so no real Muxy host is required.
 
