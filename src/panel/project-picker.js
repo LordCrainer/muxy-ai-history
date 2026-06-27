@@ -233,3 +233,69 @@ export function findActiveIndex(items, currentFilter) {
   }
   return -1;
 }
+
+// ----- Auto-switch helper -----------------------------------------------------
+
+// selectProjectAndFilter — extracted from main.js for testability.
+// All Muxy API access and DOM side effects are injected via `deps`.
+//
+// deps = {
+//   state,                        // shared state object (mutated in place)
+//   muxy,                         // Muxy API (or mock)
+//   els,                          // DOM element refs
+//   refreshPickerButton,          // () => void
+//   renderList,                   // () => void
+//   setStatus,                    // (text, kind) => void
+//   findBestProjectForPath,       // (projects, path) => project | null
+//   isProjectActive,              // ({muxy, pathInside}, project) => boolean
+//   pathInside                    // (child, parent) => boolean
+// }
+//
+// Returns a Promise<void>.
+//
+// Behavior:
+//   1. Switches to the list view (hides detail, shows conversations, tabs, filters).
+//   2. Applies the filter synchronously (state.projectFilter, state.page, renderList).
+//   3. Best-effort, SILENT auto-switch to the matching Muxy project via
+//      muxy.projects.list → findBestProjectForPath → muxy.projects.switchTo.
+//      The filter is always applied regardless of switch outcome.
+//      Failures are logged via console.warn; the UI stays intact.
+export async function selectProjectAndFilter(deps, path) {
+  const {
+    state, muxy, els,
+    refreshPickerButton, renderList, setStatus,
+    findBestProjectForPath, isProjectActive, pathInside
+  } = deps;
+
+  // 1. Switch to the list view
+  state.currentDetail = null;
+  if (els.detail) els.detail.classList.add('hidden');
+  if (els.conversations) els.conversations.classList.remove('hidden');
+  const filtersEl = els.filters || (typeof document !== 'undefined' ? document.querySelector('.filters') : null);
+  const tabsEl = els.tabs || (typeof document !== 'undefined' ? document.querySelector('.tabs') : null);
+  if (filtersEl) filtersEl.classList.remove('hidden');
+  if (tabsEl) tabsEl.classList.remove('hidden');
+
+  // 2. Apply filter (synchronous, immediate UI update)
+  state.projectFilter = path || '';
+  state.page = 1;
+  refreshPickerButton();
+  renderList();
+
+  // 3. Auto-switch (best-effort, silent). Filter is already applied.
+  if (!path) return;
+  if (typeof muxy === 'undefined' || !muxy.projects ||
+      typeof muxy.projects.list !== 'function') return;
+  try {
+    const projects = await muxy.projects.list();
+    const match = findBestProjectForPath(projects, path);
+    if (!match) return;
+    if (isProjectActive({ muxy, pathInside }, match)) return;
+    if (typeof muxy.projects.switchTo !== 'function') return;
+    const id = match.id || match.name || match.path;
+    await muxy.projects.switchTo(id);
+    setStatus(`Switched to ${match.name || match.path}`, 'ok');
+  } catch (e) {
+    console.warn('[ai-history] auto-switch failed', e);
+  }
+}

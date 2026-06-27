@@ -29,9 +29,10 @@ import {
   getPickerLabel,
   buildPickerItems,
   matchItem,
-  findActiveIndex
+  findActiveIndex,
+  selectProjectAndFilter as selectProjectAndFilterImpl
 } from './project-picker.js';
-import { openInTerminal as openInTerminalImpl } from './open-in-terminal.js';
+import { openInTerminal as openInTerminalImpl, isProjectActive } from './open-in-terminal.js';
 
 // HOME-relative paths are resolved at runtime via `getPaths()` (see below).
 // We can't use `process.env.HOME` because the panel runs in a browser and the
@@ -75,7 +76,9 @@ const els = {
   detailTitle: document.getElementById('detail-title'),
   detailMeta: document.getElementById('detail-meta'),
   messages: document.getElementById('messages'),
-  tabs: document.querySelectorAll('.tab'),
+  tabButtons: document.querySelectorAll('.tab'),
+  filters: document.querySelector('.filters'),
+  tabs: document.querySelector('.tabs'),
   menuPopover: document.getElementById('menu-popover'),
   exportModal: document.getElementById('export-modal'),
   exportPreview: document.getElementById('export-modal-preview'),
@@ -331,11 +334,26 @@ function selectPickerItem(index) {
   const item = state.pickerItems[index];
   if (!item) return;
   if (item.kind === 'project-header' || item.kind === 'path-header') return;
-  state.projectFilter = item.value || '';
-  state.page = 1;
-  refreshPickerButton();
-  renderList();
   closeProjectPicker();
+  // Fire-and-forget: the helper applies the filter synchronously and
+  // performs the best-effort auto-switch asynchronously.
+  selectProjectAndFilter(item.value || '');
+}
+
+// Thin wrapper that injects the real DOM, Muxy, and state deps. Kept
+// synchronous-shaped (returns a Promise) so the caller can fire-and-forget.
+function selectProjectAndFilter(path) {
+  return selectProjectAndFilterImpl({
+    state,
+    muxy,
+    els,
+    refreshPickerButton,
+    renderList,
+    setStatus,
+    findBestProjectForPath,
+    isProjectActive,
+    pathInside
+  }, path);
 }
 
 async function gitToplevel(path) {
@@ -695,8 +713,8 @@ function renderDetail() {
   const { conv, messages } = state.currentDetail;
   els.conversations.classList.add('hidden');
   els.loadMoreWrap.classList.add('hidden');
-  document.querySelector('.filters').classList.add('hidden');
-  document.querySelector('.tabs').classList.add('hidden');
+  els.filters.classList.add('hidden');
+  els.tabs.classList.add('hidden');
   els.detail.classList.remove('hidden');
   els.detailTitle.textContent = (conv && conv.title) || '(untitled)';
   const meta = [];
@@ -769,8 +787,8 @@ function showList() {
   state.currentDetail = null;
   els.detail.classList.add('hidden');
   els.conversations.classList.remove('hidden');
-  document.querySelector('.filters').classList.remove('hidden');
-  document.querySelector('.tabs').classList.remove('hidden');
+  els.filters.classList.remove('hidden');
+  els.tabs.classList.remove('hidden');
   renderList();
 }
 
@@ -1125,9 +1143,9 @@ els.loadMore.addEventListener('click', () => {
   renderList();
 });
 els.back.addEventListener('click', showList);
-els.tabs.forEach((tab) => {
+els.tabButtons.forEach((tab) => {
   tab.addEventListener('click', () => {
-    els.tabs.forEach((t) => t.classList.remove('active'));
+    els.tabButtons.forEach((t) => t.classList.remove('active'));
     tab.classList.add('active');
     state.provider = tab.dataset.provider;
     state.page = 1;
@@ -1323,16 +1341,15 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Breadcrumb click → filter by that path segment
+// Breadcrumb click → filter by that path segment + auto-switch Muxy project
 document.addEventListener('click', (e) => {
   const crumb = e.target.closest('.crumb');
   if (!crumb) return;
   const path = crumb.dataset.path || '';
   if (!path) return;
-  state.projectFilter = path;
-  state.page = 1;
-  refreshPickerButton();
-  showList();
+  // Fire-and-forget: helper applies the filter synchronously and performs
+  // the best-effort auto-switch asynchronously.
+  selectProjectAndFilter(path);
 });
 
 loadConversations();

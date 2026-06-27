@@ -20,6 +20,7 @@ AI History reads the on-disk session stores of Claude Code and OpenCode and expo
 - Cmd/Ctrl+Click opens the message detail view
 - 3-dot menu on each card: **View**, **Copy path**, **Export** (Copy / Save as Markdown), **Rename**
 - Clickable breadcrumb in the detail view — clicking any segment filters the list to that subpath
+- Selecting a project in the picker (or clicking a detail-view breadcrumb) auto-switches Muxy to that project when a match exists, so the next "resume in terminal" skips the project-switch step. Silent (status bar only).
 
 ### Modify
 - Rename a session inline; writes through to the source (SQL for OpenCode, sidecar JSON for Claude Code)

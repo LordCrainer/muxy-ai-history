@@ -17,6 +17,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Path abbreviation with `~` for `$HOME` paths in the list and picker; the absolute path is preserved in the tooltip
 - New pure module `src/panel/project-picker.js` exporting 5 testable helpers: `filterGroups`, `getPickerLabel`, `buildPickerItems`, `matchItem`, `findActiveIndex`
 - New pure helpers in `src/panel/utils.js`: `abbreviateHome`, `expandHome`, and an updated `decodeClaudeProject(project, home)` that resolves `~-`-encoded paths
+- Auto-switch to the selected project: choosing a project in the picker (or clicking a breadcrumb in the detail view) switches Muxy to that project when a matching one exists. The next "resume in terminal" then skips the project switch step. The switch is silent (status bar only).
 
 ### Changed
 - The static `<select>`-based project filter is replaced with the searchable popover described above

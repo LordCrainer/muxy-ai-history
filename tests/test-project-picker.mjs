@@ -7,9 +7,12 @@
 //   - buildPickerItems
 //   - matchItem
 //   - findActiveIndex
+//   - selectProjectAndFilter  (deps-injected; tested with DOM + muxy mocks)
 //
-// All functions are pure, so the tests need no DOM, no Muxy API, and no
-// fixtures on disk. Inputs and expected outputs are constructed inline.
+// The first 5 are pure, so the tests need no DOM, no Muxy API, and no
+// fixtures on disk. The 6th is a thin orchestrator around side effects
+// (state, DOM, muxy) — the test injects a small DOM mock and a muxy mock
+// to assert on call sequences and state mutations.
 
 import { homedir } from 'os';
 
@@ -18,8 +21,14 @@ import {
   getPickerLabel,
   buildPickerItems,
   matchItem,
-  findActiveIndex
+  findActiveIndex,
+  selectProjectAndFilter
 } from '../src/panel/project-picker.js';
+import {
+  findBestProjectForPath,
+  pathInside
+} from '../src/panel/utils.js';
+import { isProjectActive } from '../src/panel/open-in-terminal.js';
 
 const HOME = homedir();
 
@@ -414,6 +423,254 @@ console.log('\n5. findActiveIndex');
 
   // Empty array
   check('empty array: returns -1', findActiveIndex([]) === -1);
+}
+
+// ---- 6. selectProjectAndFilter (auto-switch) --------------------------------
+
+// Mock factory: a minimal muxy.projects stub that records every call and
+// lets the test inject return values or thrown errors per endpoint.
+function createAutoSwitchMuxy({ projectsListResult = [], switchToThrows = false, listThrows = false } = {}) {
+  const calls = [];
+  const projects = {
+    list: async () => {
+      calls.push({ key: 'projects.list' });
+      if (listThrows) throw new Error('list failed');
+      return projectsListResult;
+    },
+    switchTo: async (id) => {
+      calls.push({ key: 'projects.switchTo', id });
+      if (switchToThrows) throw new Error('switch failed');
+      return undefined;
+    }
+  };
+  return { calls, projects };
+}
+
+// DOM element mock with a recording classList.
+function makeDomMock() {
+  const log = { add: [], remove: [] };
+  return {
+    log,
+    el: {
+      classList: {
+        add: (cls) => { log.add.push(cls); },
+        remove: (cls) => { log.remove.push(cls); },
+        contains: () => false
+      }
+    }
+  };
+}
+
+// Build a fresh deps object for each test (clones state, creates new mocks).
+function makeDeps({ muxy, isActive = false } = {}) {
+  const detail = makeDomMock();
+  const conversations = makeDomMock();
+  const filters = makeDomMock();
+  const tabs = makeDomMock();
+  const state = {
+    projectFilter: 'preexisting-filter',
+    page: 99,
+    currentDetail: { some: 'thing' }
+  };
+  const statuses = [];
+  const counts = { renderList: 0, refresh: 0 };
+  const deps = {
+    state,
+    muxy,
+    els: {
+      detail: detail.el,
+      conversations: conversations.el,
+      filters: filters.el,
+      tabs: tabs.el
+    },
+    refreshPickerButton: () => { counts.refresh += 1; },
+    renderList: () => { counts.renderList += 1; },
+    setStatus: (text, kind) => statuses.push({ text, kind }),
+    findBestProjectForPath,
+    isProjectActive: () => isActive,
+    pathInside
+  };
+  return { deps, state, statuses, counts, detail, conversations, filters, tabs };
+}
+
+console.log('\n6. selectProjectAndFilter (auto-switch)');
+{
+  // 6.1 — empty path: state updated, no muxy calls
+  {
+    const muxy = createAutoSwitchMuxy();
+    const { deps, state, statuses, counts } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '');
+    check('empty path: state.projectFilter = ""', state.projectFilter === '');
+    check('empty path: state.page = 1', state.page === 1);
+    check('empty path: state.currentDetail cleared', state.currentDetail === null);
+    check('empty path: renderList called once', counts.renderList === 1, `got ${counts.renderList}`);
+    check('empty path: refreshPickerButton called once', counts.refresh === 1, `got ${counts.refresh}`);
+    check('empty path: projects.list NOT called',
+      muxy.calls.filter((c) => c.key === 'projects.list').length === 0);
+    check('empty path: projects.switchTo NOT called',
+      muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
+    check('empty path: setStatus NOT called', statuses.length === 0);
+  }
+
+  // 6.2 — valid path + matching project (NOT active) → list + switchTo called
+  {
+    const PROJ = '/Users/x/Repos/muxy-ext';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p1', name: 'muxy-ext', path: PROJ, isActive: false }]
+    });
+    const { deps, state, statuses } = makeDeps({ muxy, isActive: false });
+    await selectProjectAndFilter(deps, PROJ);
+    check('valid+match+inactive: state.projectFilter = path', state.projectFilter === PROJ);
+    const listCalls = muxy.calls.filter((c) => c.key === 'projects.list');
+    check('valid+match+inactive: projects.list called once', listCalls.length === 1, `got ${listCalls.length}`);
+    const switchCalls = muxy.calls.filter((c) => c.key === 'projects.switchTo');
+    check('valid+match+inactive: projects.switchTo called once', switchCalls.length === 1, `got ${switchCalls.length}`);
+    check('valid+match+inactive: switchTo called with id',
+      switchCalls.length > 0 && switchCalls[0].id === 'p1', `got ${JSON.stringify(switchCalls[0])}`);
+    check('valid+match+inactive: setStatus called with project name',
+      statuses.some((s) => s.text === 'Switched to muxy-ext' && s.kind === 'ok'));
+  }
+
+  // 6.3 — valid path + matching project ALREADY ACTIVE → list called, switchTo NOT called
+  {
+    const PROJ = '/Users/x/Repos/muxy-ext';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p1', name: 'muxy-ext', path: PROJ, isActive: true }]
+    });
+    const { deps, state, statuses } = makeDeps({ muxy, isActive: true });
+    await selectProjectAndFilter(deps, PROJ);
+    check('valid+match+active: state.projectFilter = path', state.projectFilter === PROJ);
+    check('valid+match+active: projects.list called', muxy.calls.filter((c) => c.key === 'projects.list').length === 1);
+    check('valid+match+active: projects.switchTo NOT called',
+      muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
+    check('valid+match+active: setStatus NOT called', statuses.length === 0);
+  }
+
+  // 6.4 — valid path + NO matching project → list called, switchTo NOT called
+  {
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p1', name: 'other-repo', path: '/Users/x/Repos/other-repo' }]
+    });
+    const { deps, state, statuses, counts } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '/Users/x/Repos/muxy-ext');
+    check('no-match: state.projectFilter still set', state.projectFilter === '/Users/x/Repos/muxy-ext');
+    check('no-match: projects.list called', muxy.calls.filter((c) => c.key === 'projects.list').length === 1);
+    check('no-match: projects.switchTo NOT called',
+      muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
+    check('no-match: renderList still called', counts.renderList === 1);
+    check('no-match: setStatus NOT called', statuses.length === 0);
+  }
+
+  // 6.5 — muxy undefined: only state updated, no list call
+  {
+    const { deps, state, counts } = makeDeps({ muxy: undefined });
+    await selectProjectAndFilter(deps, '/some/path');
+    check('muxy undefined: state.projectFilter updated', state.projectFilter === '/some/path');
+    check('muxy undefined: renderList called', counts.renderList === 1);
+  }
+
+  // 6.6 — muxy.projects undefined: only state updated, no list call
+  {
+    const muxy = {};  // no .projects
+    const { deps, state, counts } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '/some/path');
+    check('muxy.projects undefined: state.projectFilter updated', state.projectFilter === '/some/path');
+    check('muxy.projects undefined: renderList called', counts.renderList === 1);
+  }
+
+  // 6.7 — projects.list throws: filter still applied, no switchTo
+  {
+    const muxy = createAutoSwitchMuxy({ listThrows: true });
+    const { deps, state, counts } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '/some/path');
+    check('list-throws: state.projectFilter updated', state.projectFilter === '/some/path');
+    check('list-throws: renderList called', counts.renderList === 1);
+    check('list-throws: projects.switchTo NOT called',
+      muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 0);
+  }
+
+  // 6.8 — projects.switchTo throws: filter still applied, no setStatus
+  {
+    const PROJ = '/Users/x/Repos/muxy-ext';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p1', name: 'muxy-ext', path: PROJ, isActive: false }],
+      switchToThrows: true
+    });
+    const { deps, state, statuses } = makeDeps({ muxy, isActive: false });
+    await selectProjectAndFilter(deps, PROJ);
+    check('switchTo-throws: state.projectFilter updated', state.projectFilter === PROJ);
+    check('switchTo-throws: projects.switchTo was called (then threw)',
+      muxy.calls.filter((c) => c.key === 'projects.switchTo').length === 1);
+    check('switchTo-throws: no success setStatus emitted', statuses.length === 0);
+  }
+
+  // 6.9 — setStatus called with project name on successful switch
+  {
+    const PROJ = '/Users/x/Repos/cool-tool';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p7', name: 'cool-tool', path: PROJ, isActive: false }]
+    });
+    const { deps, statuses } = makeDeps({ muxy, isActive: false });
+    await selectProjectAndFilter(deps, PROJ);
+    check('setStatus: called with kind=ok', statuses.some((s) => s.kind === 'ok'));
+    check('setStatus: text contains project name',
+      statuses.some((s) => s.text === 'Switched to cool-tool'));
+  }
+
+  // 6.10 — setStatus NOT called when project is already active (no toast/status)
+  {
+    const PROJ = '/Users/x/Repos/already-active';
+    const muxy = createAutoSwitchMuxy({
+      projectsListResult: [{ id: 'p9', name: 'already-active', path: PROJ, isActive: true }]
+    });
+    const { deps, statuses } = makeDeps({ muxy, isActive: true });
+    await selectProjectAndFilter(deps, PROJ);
+    check('already-active: setStatus NOT called', statuses.length === 0,
+      `got ${statuses.length} status(es): ${JSON.stringify(statuses)}`);
+  }
+
+  // 6.11 — DOM toggling: detail hidden, conversations/filters/tabs unhidden
+  {
+    const muxy = createAutoSwitchMuxy();
+    const { deps, detail, conversations, filters, tabs } = makeDeps({ muxy });
+    await selectProjectAndFilter(deps, '/some/path');
+    check('dom: detail.classList.add("hidden") called',
+      detail.log.add.includes('hidden'));
+    check('dom: conversations.classList.remove("hidden") called',
+      conversations.log.remove.includes('hidden'));
+    check('dom: filters.classList.remove("hidden") called',
+      filters.log.remove.includes('hidden'));
+    check('dom: tabs.classList.remove("hidden") called',
+      tabs.log.remove.includes('hidden'));
+  }
+
+  // 6.12 — switchTo ID resolution falls back to name, then path
+  {
+    // Project with no `id` field → should use `name`
+    {
+      const PROJ = '/Users/x/Repos/noid';
+      const muxy = createAutoSwitchMuxy({
+        projectsListResult: [{ name: 'noid', path: PROJ, isActive: false }]
+      });
+      const { deps } = makeDeps({ muxy, isActive: false });
+      await selectProjectAndFilter(deps, PROJ);
+      const switchCalls = muxy.calls.filter((c) => c.key === 'projects.switchTo');
+      check('fallback id: no `id` → uses `name`',
+        switchCalls.length > 0 && switchCalls[0].id === 'noid', `got ${JSON.stringify(switchCalls[0])}`);
+    }
+    // Project with no `id` and no `name` → falls back to `path`
+    {
+      const PROJ = '/Users/x/Repos/noname';
+      const muxy = createAutoSwitchMuxy({
+        projectsListResult: [{ path: PROJ, isActive: false }]
+      });
+      const { deps } = makeDeps({ muxy, isActive: false });
+      await selectProjectAndFilter(deps, PROJ);
+      const switchCalls = muxy.calls.filter((c) => c.key === 'projects.switchTo');
+      check('fallback id: no `id` or `name` → uses `path`',
+        switchCalls.length > 0 && switchCalls[0].id === PROJ, `got ${JSON.stringify(switchCalls[0])}`);
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
