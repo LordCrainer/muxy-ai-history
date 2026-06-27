@@ -1,6 +1,6 @@
 {
   "name": "ai-history",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,13 @@
     "vite": "^7.3.5"
   },
   "changelog": {
+    "0.9.0": [
+      "Auto-switch direction inverted: the panel now follows Muxy's active project (Muxy → extension) instead of pushing project changes to Muxy (extension → Muxy). When you change the active project in Muxy, the panel filter updates automatically and the picker button reflects the new project.",
+      "The v0.8.0/v0.8.1 auto-switch (which called muxy.projects.switchTo from picker clicks and breadcrumb clicks) has been removed. Picker and breadcrumb clicks now only filter the local view — they do not change Muxy's active project.",
+      "New file src/panel/project-change-listener.js: pure helpers (extractPathFromProjectEvent, setupProjectChangeListener, PROJECT_CHANGE_CANDIDATES) that subscribe to a candidate list of Muxy project-change events and apply the new path to the panel. Extracted for unit testability.",
+      "When the user is reading a conversation in detail view and Muxy switches projects, the detail view is preserved — only state.projectFilter and the list are updated. The detail view reflects the new filter when the user navigates back.",
+      "The 'openInTerminal' flow (v0.5) still auto-switches Muxy to the project that owns the conversation before opening the terminal, so the terminal's cwd matches the conversation. This is a different use case (preparing context for an action) and is intentionally preserved."
+    ],
     "0.7.0": [
       "Project picker menu with search, replacing the static <select> dropdown",
       "Click on a conversation now resumes the session in a terminal; Cmd/Ctrl+Click opens the detail view",

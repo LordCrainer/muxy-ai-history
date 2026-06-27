@@ -20,7 +20,7 @@ AI History reads the on-disk session stores of Claude Code and OpenCode and expo
 - Cmd/Ctrl+Click opens the message detail view
 - 3-dot menu on each card: **View**, **Copy path**, **Export** (Copy / Save as Markdown), **Rename**
 - Clickable breadcrumb in the detail view — clicking any segment filters the list to that subpath
-- Selecting a project in the picker (or clicking a detail-view breadcrumb) auto-switches Muxy to that project when a match exists, so the next "resume in terminal" skips the project-switch step. Silent (status bar only).
+- When you change the active project in Muxy (from the sidebar, topbar, or command palette), the panel filter follows automatically and the picker button reflects the new project. If the user is reading a conversation in detail view, the detail is preserved — only the list re-renders. The picker and breadcrumb clicks filter the local view only; they do not change Muxy's active project.
 
 ### Modify
 - Rename a session inline; writes through to the source (SQL for OpenCode, sidecar JSON for Claude Code)
@@ -130,11 +130,11 @@ Paths under `$HOME` are rendered with a `~` prefix to reduce visual noise (for e
 Grouped by purpose. The exact list is enumerated in `src/panel/main.js`.
 
 - **File / shell I/O** — `muxy.exec(["/bin/cat", file])` for JSONL, `muxy.exec(["/usr/bin/sqlite3", "-json", db, sql])` for OpenCode queries, `muxy.exec(["/usr/bin/sqlite3", db, updateSql])` for OpenCode renames, `muxy.exec(["/bin/mkdir", "-p", dir])` for export directories, chunked `muxy.exec(["/bin/sh", "-c", "printf '%s' '...' >> /tmp/..."])` followed by `muxy.exec(["/bin/sh", "-c", "base64 -d < /tmp/... > PATH"])` for large writes.
-- **Projects** — `muxy.projects.list()`, `muxy.projects.switchTo(identifier)`.
+- **Projects** — `muxy.projects.list()`. The `muxy.projects.switchTo(identifier)` call is used only by the `openInTerminal` flow to set up the terminal's cwd; the picker and breadcrumb do not switch Muxy projects.
 - **Worktrees** — `muxy.worktrees.list({ project })`, `muxy.worktrees.switchTo(identifier, project)`; fallback to `muxy.git.worktrees()` and `muxy.git.worktree.switchTo({ identifier })`.
 - **Git** — `muxy.git.repoInfo()` to detect the active worktree.
 - **Tabs** — `muxy.tabs.list()`, `muxy.tabs.switchTo(idOrIndex)`, `muxy.tabs.open({ kind, command, directory, singleton })`.
-- **UI** — `muxy.toast({ title, body, variant })` (variant: `info` | `error` | `success` | `warn`); `muxy.events.subscribe('command.refresh-history', ...)` for palette-driven refresh.
+- **UI** — `muxy.toast({ title, body, variant })` (variant: `info` | `error` | `success` | `warn`); `muxy.events.subscribe('command.refresh-history', ...)` for palette-driven refresh; `muxy.events.subscribe('<project-changed-event>', ...)` (one of `project.changed`, `projects.active.changed`, `projects.current.changed`, `workspace.changed`, `repository.changed`, `git.changed`) for the Muxy → extension auto-filter.
 - **Browser** — `navigator.clipboard.writeText(text)` for the clipboard actions.
 
 ## Development
@@ -158,9 +158,10 @@ bun install
 
 - `bun run dev` — Vite dev server on port 5173
 - `bun run build` — produces `dist/` (Vite bundle + manifest copy)
-- `bun run test` — runs all 4 test suites (654 tests)
+- `bun run test` — runs all 5 test suites (644 tests)
 - `bun run test:oit` — runs only the `open-in-terminal` suite
 - `bun run test:picker` — runs only the `project-picker` suite
+- `bun run test:listener` — runs only the `project-listener` suite
 
 > Equivalents for npm users: `npm run dev`, `npm run build`, `npm test`, etc.
 
@@ -169,6 +170,7 @@ bun install
 - `src/panel/utils.js` — pure helpers (formatting, escaping, project grouping, `~`-expansion, path matching, worktree selection). No DOM access, no Muxy API references; safe to import from Node tests.
 - `src/panel/open-in-terminal.js` — the smart routing logic. All Muxy API access and side effects are injected via a `deps` object so the module is unit-testable in isolation.
 - `src/panel/project-picker.js` — pure helpers for the project picker popover: `filterGroups`, `getPickerLabel`, `buildPickerItems`, `matchItem`, `findActiveIndex`.
+- `src/panel/project-change-listener.js` — pure helpers for the Muxy project-change listener: `PROJECT_CHANGE_CANDIDATES`, `extractPathFromProjectEvent`, `setupProjectChangeListener`. Extracted from `main.js` for unit testability.
 - `src/panel/panel.html` — entry HTML (button, popover, modal containers).
 - `src/panel/styles.css` — dark theme styles for the panel, cards, menu, picker, breadcrumb, and modal.
 
@@ -195,20 +197,21 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 
 ## Tests
 
-654 tests across 4 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+644 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
-| Suite                              | Tests | What it covers                                |
-| ---------------------------------- | ----- | --------------------------------------------- |
-| `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                 |
-| `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer       |
-| `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic  |
-| `tests/test-project-picker.mjs`    | 138   | The 5 pure helpers in `project-picker.js`      |
+| Suite                              | Tests | What it covers                                                              |
+| ---------------------------------- | ----- | --------------------------------------------------------------------------- |
+| `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                                               |
+| `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer                                     |
+| `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic                                |
+| `tests/test-project-picker.mjs`    | 111   | The 5 pure helpers in `project-picker.js` + the simplified `selectProjectAndFilter` |
+| `tests/test-project-listener.mjs`  | 17    | The Muxy project-change listener (extracted to `project-change-listener.js`) |
 
 The routing tests use a programmable Muxy mock factory (`createMuxyMock()`) that records every API call and lets you inject responses per key, so no real Muxy host is required.
 
 ## Bundle size
 
-~42KB raw / ~13KB gzipped. Vite + vanilla JS, no frameworks.
+~45KB raw / ~14KB gzipped. Vite + vanilla JS, no frameworks.
 
 ## License
 

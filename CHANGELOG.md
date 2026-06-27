@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-27
+
+### Changed
+- **Auto-switch direction inverted.** The panel now follows Muxy's active project (Muxy → extension) instead of pushing project changes to Muxy (extension → Muxy). When you change the active project in Muxy, the panel filter updates automatically and the picker button reflects the new project.
+- The detail view is preserved when Muxy switches projects while the user is reading a conversation: only `state.projectFilter` and the list re-render. The detail view reflects the new filter when the user navigates back.
+- The helper `selectProjectAndFilter` is now purely a filter+render function: it hides the detail view, shows the list/filters/tabs, sets `state.projectFilter`, and calls `refreshPickerButton()` + `renderList()`. No Muxy API calls. No console diagnostics. Async signature kept for forward compatibility.
+
+### Added
+- New file `src/panel/project-change-listener.js` exporting pure helpers: `PROJECT_CHANGE_CANDIDATES` (a frozen list of 6 candidate event names: `project.changed`, `projects.active.changed`, `projects.current.changed`, `workspace.changed`, `repository.changed`, `git.changed`), `extractPathFromProjectEvent(event)` (returns the new path from the event payload or `null`), and `setupProjectChangeListener(deps)` (subscribes to all candidates and returns `{subscribed, failed}`). The wrapper in `main.js` provides the `onFilterChange` callback with the existing console diagnostic logging.
+- New test suite `tests/test-project-listener.mjs` with 17 checks for the pure listener logic.
+
+### Removed
+- The `muxy.projects.switchTo` call from the project picker and the detail-view breadcrumb. These actions now only filter the local view; they do not change Muxy's active project.
+- The 44 auto-switch acceptance checks from `tests/test-project-picker.mjs` (replaced by 14 checks for the simplified helper + 17 new checks in `tests/test-project-listener.mjs`).
+
+### Notes
+- The v0.8.0/v0.8.1 auto-switch attempted the extension → Muxy direction and was never released. The `muxy.projects.switchTo` call is still used by the `openInTerminal` flow (v0.5) to prepare the terminal's cwd — that use case is intentionally preserved.
+- If none of the 6 candidate Muxy event names fire in your Muxy version, the listener logs `[ai-history] NO project-change event could be subscribed` at startup. Add the correct event name to `PROJECT_CHANGE_CANDIDATES` in `src/panel/project-change-listener.js`.
+
 ## [0.8.1] - 2026-06-27
 
 ### Fixed
