@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
     "build:surfaces": "vite build",
-    "test": "node tests/test-parsers.mjs && node tests/test-chunked-write.mjs && node tests/test-open-in-terminal.mjs && node tests/test-project-picker.mjs",
+    "test": "node tests/test-parsers.mjs && node tests/test-chunked-write.mjs && node tests/test-open-in-terminal.mjs && node tests/test-project-picker.mjs && node tests/test-project-listener.mjs",
     "test:oit": "node tests/test-open-in-terminal.mjs",
     "test:picker": "node tests/test-project-picker.mjs"
   },
