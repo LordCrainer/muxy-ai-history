@@ -33,7 +33,10 @@ import {
   selectProjectAndFilter as selectProjectAndFilterImpl
 } from './project-picker.js';
 import { openInTerminal as openInTerminalImpl, isProjectActive } from './open-in-terminal.js';
-import { setupProjectChangeListener as setupProjectChangeListenerImpl } from './project-change-listener.js';
+import {
+  setupProjectChangeListener as setupProjectChangeListenerImpl,
+  startPollingFallback
+} from './project-change-listener.js';
 
 // HOME-relative paths are resolved at runtime via `getPaths()` (see below).
 // We can't use `process.env.HOME` because the panel runs in a browser and the
@@ -1263,28 +1266,37 @@ if (typeof muxy !== 'undefined' && muxy.events && muxy.events.subscribe) {
 // The candidate list and subscription loop live in project-change-listener.js
 // so the logic is unit-testable. This wrapper injects the panel's real deps
 // (muxy, state, the two filter setters) and emits the diagnostic logs.
+//
+// Diagnostic surface: status bar messages are emitted at every key step
+// (subscribed, none-subscribed, polling fallback started, filter synced) so
+// the user can see the listener state without opening DevTools. This is
+// critical because Muxy's debugger does not show console.log from the panel
+// iframe. console.log/warn are still emitted for advanced debugging.
 function setupProjectChangeListener() {
-  const result = setupProjectChangeListenerImpl({
-    muxy,
-    state,
-    onFilterChange: (newPath) => {
-      console.log(
-        `[ai-history] project-change event: newPath=${JSON.stringify(newPath)} ` +
-        `currentFilter=${JSON.stringify(state.projectFilter)}`
-      );
+  // Shared callback: invoked by both the event subscription and the polling
+  // fallback. Centralizes the "filter applied" side effects (status, render,
+  // detail-view preservation).
+  const applyFilter = (newPath) => {
+    const label = (newPath || '').split('/').filter(Boolean).pop() || newPath || '';
+    console.log(
+      `[ai-history] project-change event: newPath=${JSON.stringify(newPath)} ` +
+      `currentFilter=${JSON.stringify(state.projectFilter)}`
+    );
+    setStatus(`Filter synced: ${label}`, 'ok');
+    if (state.currentDetail) {
       // If the user is reading a conversation in detail view, do NOT close
       // the detail view — just sync the filter and re-render. The detail
       // view will reflect the new filter when the user navigates back.
-      if (state.currentDetail) {
-        state.projectFilter = newPath;
-        refreshPickerButton();
-        renderList();
-      } else {
-        // Normal path: switch to list view and apply the filter.
-        selectProjectAndFilter(newPath);
-      }
+      state.projectFilter = newPath;
+      refreshPickerButton();
+      renderList();
+    } else {
+      // Normal path: switch to list view and apply the filter.
+      selectProjectAndFilter(newPath);
     }
-  });
+  };
+
+  const result = setupProjectChangeListenerImpl({ muxy, state, onFilterChange: applyFilter });
 
   // Surface each rejected candidate so Muxy version mismatches are debuggable
   // from DevTools without the user having to add breakpoints.
@@ -1295,17 +1307,28 @@ function setupProjectChangeListener() {
   if (result.subscribed.length === 0) {
     if (!muxy || !muxy.events || typeof muxy.events.subscribe !== 'function') {
       console.warn('[ai-history] muxy.events.subscribe unavailable; project-change listener not installed');
+      setStatus('Auto-follow: muxy.events unavailable', 'warn');
     } else {
       console.warn(
         '[ai-history] NO project-change event could be subscribed — listener is a no-op. ' +
         'Inspect Muxy docs for the correct event name and add it to the candidates list.'
       );
+      setStatus('Auto-follow: no Muxy event worked, polling as fallback', 'warn');
+      // This message persists while polling is active. It is informational,
+      // not transient. The next filter sync will set its own status (which
+      // gets overwritten on the next sync) — but the warn message will be
+      // visible again the next time the panel mounts.
+      const poll = startPollingFallback({ muxy, state, onFilterChange: applyFilter });
+      if (poll.active) {
+        console.log('[ai-history] polling fallback started (3s interval, watching muxy.git.repoInfo)');
+      }
     }
   } else {
     console.log(`[ai-history] listener installed via event "${result.subscribed[0]}"`);
     for (let i = 1; i < result.subscribed.length; i += 1) {
       console.log(`[ai-history] skip extra event "${result.subscribed[i]}" (already subscribed)`);
     }
+    setStatus(`Auto-follow: listening to ${result.subscribed[0]}`, 'ok');
   }
 }
 

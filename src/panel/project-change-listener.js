@@ -82,3 +82,77 @@ export function setupProjectChangeListener(deps) {
   }
   return { subscribed, failed };
 }
+
+// Polling fallback for the project-change listener. When none of the Muxy
+// event-name candidates in PROJECT_CHANGE_CANDIDATES work (the user's Muxy
+// version uses a different event name), this helper watches
+// `muxy.git.repoInfo().root` on an interval and invokes `onFilterChange`
+// whenever the active root changes.
+//
+// The algorithm is SYMMETRIC with the event helper above:
+//   - On every tick, capture the current root.
+//   - If it equals the last seen root → no change, skip.
+//   - Otherwise, ALWAYS update `lastActiveRoot` (this prevents thrash when
+//     the user manually picks a project in the picker: the closure would
+//     otherwise see "root != lastActiveRoot" forever and fire every tick).
+//   - If the new root equals `state.projectFilter` → already in sync, skip.
+//   - Otherwise call `onFilterChange(newRoot)`.
+//
+// `setIntervalFn` and `intervalMs` are injectable for tests.
+//
+// Returns { active: boolean, stop?: () => void }.
+//   - { active: false } when muxy.git.repoInfo is unavailable.
+//   - { active: true, stop } when polling is running.
+export function startPollingFallback({
+  muxy,
+  state,
+  onFilterChange,
+  intervalMs = 3000,
+  setIntervalFn = globalThis.setInterval
+} = {}) {
+  // Defensive: bail if repoInfo is not a function (Reviewer m5).
+  if (!muxy || !muxy.git || typeof muxy.git.repoInfo !== 'function') {
+    return { active: false };
+  }
+  let lastActiveRoot = null;  // baseline; first tick captures only
+  let firstTick = true;        // skip fire on the very first tick
+  const handle = setIntervalFn(() => {
+    let info;
+    try {
+      info = muxy.git.repoInfo();
+    } catch {
+      return; // silent: transient errors don't kill polling (Reviewer m1)
+    }
+    const root = info && typeof info === 'object' ? info.root : null;
+    if (typeof root !== 'string' || root.length === 0) {
+      return; // malformed payload: skip tick (Reviewer m2)
+    }
+    if (firstTick) {
+      // Pure baseline capture: record the current root and exit. Do NOT
+      // fire onFilterChange even if root !== state.projectFilter — at
+      // install time we don't know if the panel was just mounted with a
+      // pre-existing filter, and firing would cause a redundant render.
+      firstTick = false;
+      lastActiveRoot = root;
+      return;
+    }
+    if (root === lastActiveRoot) return;
+    lastActiveRoot = root; // ALWAYS update before the dedup check
+    if (root === state.projectFilter) return; // user already there
+    try {
+      onFilterChange(root);
+    } catch {
+      // silent: a buggy render in onFilterChange must not kill polling (Reviewer m3)
+    }
+  }, intervalMs);
+  return {
+    active: true,
+    stop: () => {
+      // Best-effort cleanup. Works for both real setInterval (returns a
+      // number) and any test mock that implements clearInterval.
+      if (typeof globalThis.clearInterval === 'function' && handle != null) {
+        globalThis.clearInterval(handle);
+      }
+    }
+  };
+}
