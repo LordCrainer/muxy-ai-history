@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-27
+
+### Fixed
+- **Auto-follow observability.** The v0.9.0 listener was effectively undebuggable from the panel because Muxy's debugger does not surface `console.log` from the panel iframe. The listener now reports its state via the panel's status bar (visible without DevTools): `Auto-follow: listening to <event>` on install, `Auto-follow: muxy.events unavailable` when `muxy.events.subscribe` is missing, `Auto-follow: no Muxy event worked, polling as fallback` when all 6 candidate event names are rejected, and `Filter synced: <basename>` every time the filter is applied.
+- **Polling fallback that was promised in the v0.9.0 plan but not shipped.** When none of the 6 candidate event names are recognized by the user's Muxy version, a polling fallback activates automatically: it watches `muxy.git.repoInfo().root` on a 3-second interval and calls the same `onFilterChange` wrapper as the event helper. The algorithm is symmetric with the event helper (updates `lastActiveRoot` on every observed tick before the dedup check against `state.projectFilter`) to prevent thrash loops when the user manually picks a project via the picker.
+
+### Added
+- New export `startPollingFallback({muxy, state, onFilterChange, intervalMs=3000, setIntervalFn=globalThis.setInterval})` in `src/panel/project-change-listener.js`. Returns `{active: false}` when `muxy.git.repoInfo` is not a function; `{active: true, stop}` when polling is running. The first tick is a pure baseline capture (records the current root and returns) so the polling does not cause a redundant render when the panel mounts with a pre-existing filter. Transient `repoInfo` throws and buggy `onFilterChange` throws are both silently swallowed to keep the polling alive.
+- 20 unit tests (17 cases) for the polling helper in `tests/test-project-listener.mjs`, including: baseline capture, root-change detection, dedup against `state.projectFilter`, no-thrash on manual pick, defensive `typeof` check, `repoInfo` throws, malformed payloads (`{}`, `{root: null}`, `{root: ''}`), `onFilterChange` throws, custom `intervalMs`, and `stop()` cleanup.
+
 ## [0.9.0] - 2026-06-27
 
 ### Changed

@@ -1,6 +1,6 @@
 {
   "name": "ai-history",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,12 @@
     "vite": "^7.3.5"
   },
   "changelog": {
+    "0.9.1": [
+      "Auto-follow (v0.9.0) was effectively undebuggable: the listener emitted diagnostic info via console.log, but Muxy's debugger does not surface console.log from the panel iframe, so the user could not tell whether the listener was running, whether the 6 candidate event names worked, or whether polling was needed.",
+      "The listener now reports its state via the panel's status bar (visible without DevTools): 'Auto-follow: listening to <event>' on install, 'Auto-follow: muxy.events unavailable' when muxy.events.subscribe is missing, 'Auto-follow: no Muxy event worked, polling as fallback' when all candidates throw, and 'Filter synced: <basename>' every time the filter is applied.",
+      "Added a polling fallback that activates automatically when none of the 6 candidate event names are recognized by the user's Muxy version. The polling watches muxy.git.repoInfo().root on a 3-second interval. The helper lives in src/panel/project-change-listener.js as startPollingFallback so it is unit-testable. The algorithm is symmetric with the event helper and updates its lastActiveRoot on every observed tick (before the dedup check against state.projectFilter) to prevent thrash loops.",
+      "Added 20 unit tests (17 cases) for the polling helper in tests/test-project-listener.mjs, covering the baseline capture, dedup against state.projectFilter, defensive typeof check, repoInfo throws, malformed payloads, onFilterChange throws, and custom intervalMs."
+    ],
     "0.9.0": [
       "Auto-switch direction inverted: the panel now follows Muxy's active project (Muxy → extension) instead of pushing project changes to Muxy (extension → Muxy). When you change the active project in Muxy, the panel filter updates automatically and the picker button reflects the new project.",
       "The v0.8.0/v0.8.1 auto-switch (which called muxy.projects.switchTo from picker clicks and breadcrumb clicks) has been removed. Picker and breadcrumb clicks now only filter the local view — they do not change Muxy's active project.",

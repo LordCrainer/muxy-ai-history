@@ -20,7 +20,7 @@ AI History reads the on-disk session stores of Claude Code and OpenCode and expo
 - Cmd/Ctrl+Click opens the message detail view
 - 3-dot menu on each card: **View**, **Copy path**, **Export** (Copy / Save as Markdown), **Rename**
 - Clickable breadcrumb in the detail view — clicking any segment filters the list to that subpath
-- When you change the active project in Muxy (from the sidebar, topbar, or command palette), the panel filter follows automatically and the picker button reflects the new project. If the user is reading a conversation in detail view, the detail is preserved — only the list re-renders. The picker and breadcrumb clicks filter the local view only; they do not change Muxy's active project.
+- When you change the active project in Muxy (from the sidebar, topbar, or command palette), the panel filter follows automatically and the picker button reflects the new project. If the user is reading a conversation in detail view, the detail is preserved — only the list re-renders. The picker and breadcrumb clicks filter the local view only; they do not change Muxy's active project. Status bar messages (visible without DevTools) report the listener state: 'Auto-follow: listening to <event>' on install, 'Auto-follow: no Muxy event worked, polling as fallback' when polling takes over, and 'Filter synced: <basename>' on each change. If polling is active, it watches \`muxy.git.repoInfo().root\` on a 3-second interval.
 
 ### Modify
 - Rename a session inline; writes through to the source (SQL for OpenCode, sidecar JSON for Claude Code)
@@ -158,7 +158,7 @@ bun install
 
 - `bun run dev` — Vite dev server on port 5173
 - `bun run build` — produces `dist/` (Vite bundle + manifest copy)
-- `bun run test` — runs all 5 test suites (644 tests)
+- `bun run test` — runs all 5 test suites (664 tests)
 - `bun run test:oit` — runs only the `open-in-terminal` suite
 - `bun run test:picker` — runs only the `project-picker` suite
 - `bun run test:listener` — runs only the `project-listener` suite
@@ -197,7 +197,7 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 
 ## Tests
 
-644 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+664 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 | Suite                              | Tests | What it covers                                                              |
 | ---------------------------------- | ----- | --------------------------------------------------------------------------- |
@@ -205,13 +205,13 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 | `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer                                     |
 | `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic                                |
 | `tests/test-project-picker.mjs`    | 111   | The 5 pure helpers in `project-picker.js` + the simplified `selectProjectAndFilter` |
-| `tests/test-project-listener.mjs`  | 17    | The Muxy project-change listener (extracted to `project-change-listener.js`) |
+| `tests/test-project-listener.mjs`  | 37    | The Muxy project-change listener + the polling fallback (in `project-change-listener.js`) |
 
 The routing tests use a programmable Muxy mock factory (`createMuxyMock()`) that records every API call and lets you inject responses per key, so no real Muxy host is required.
 
 ## Bundle size
 
-~45KB raw / ~14KB gzipped. Vite + vanilla JS, no frameworks.
+~46KB raw / ~14KB gzipped. Vite + vanilla JS, no frameworks.
 
 ## License
 
