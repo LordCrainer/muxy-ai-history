@@ -5,11 +5,11 @@
 // The module is composed of 5 small pure functions:
 //   - filterGroups(groups, query)       — search the grouped projects
 //   - getPickerLabel(filter, groups, home) — label for the picker button
-//   - buildPickerItems(groups, filter)  — flat list ready to render
+//   - buildPickerItems(groups, filter, home)  — flat list ready to render
 //   - matchItem(items, direction, start) — keyboard nav (arrow up/down)
 //   - findActiveIndex(items)            — initial keyboard highlight
 
-import { abbreviateHome } from './utils.js';
+import { abbreviateHome, displayPathLabel } from './utils.js';
 
 // ----- Internal helpers ------------------------------------------------------
 
@@ -72,7 +72,11 @@ export function filterGroups(groups, query) {
  *   3. Filter matches a non-git group's `project` or `displayPath` → the group's
  *      `label` with `~`-abbreviation applied (so e.g. `/Users/x/scratch`
  *      becomes `~/scratch` when `home === '/Users/x'`).
- *   4. Otherwise (stale filter) → "All projects".
+ *   4. Otherwise (stale filter, e.g. Muxy's active project is set but has no
+ *      conversation history) → the filter value formatted via
+ *      `displayPathLabel` (e.g. `/Users/x/Repos/cool` → `…/Repos/cool` or
+ *      `~/Repos/cool` when under `home`). This is a hint to the user that
+ *      the filter is still applied but no items match it.
  *
  * @param {string | null | undefined} filterValue Current `state.projectFilter`.
  * @param {{git?: Array, nonGit?: Array} | null | undefined} groups
@@ -85,6 +89,11 @@ export function getPickerLabel(filterValue, groups, home) {
   if (!groups || typeof groups !== 'object') return 'All projects';
   const git = Array.isArray(groups.git) ? groups.git : [];
   const nonGit = Array.isArray(groups.nonGit) ? groups.nonGit : [];
+  // Empty groups: there is no chance for the filter to match anything, so
+  // show the generic "All projects" label rather than rendering the
+  // filter as a stand-alone path (which would visually imply it's an
+  // active, scoped filter when it can't match anything anyway).
+  if (git.length === 0 && nonGit.length === 0) return 'All projects';
   for (const g of git) {
     if (filterValue === g.toplevel || filterValue === g.project) return g.label;
   }
@@ -93,7 +102,10 @@ export function getPickerLabel(filterValue, groups, home) {
       return abbreviateHome(g.label, home);
     }
   }
-  return 'All projects';
+  // Stale filter: keep the filter visible (so the user knows the panel
+  // is still scoped) but render a compact `…/last2` label rather than the
+  // literal "All projects" (which would falsely imply "no filter").
+  return displayPathLabel(filterValue, home);
 }
 
 /**
@@ -117,12 +129,22 @@ export function getPickerLabel(filterValue, groups, home) {
  * matches (or the `all` item when the filter is empty). Stale filters
  * leave all items with `active: false`.
  *
+ * `home` is optional. When provided, `kind: 'path'` items have their
+ * `label` run through `displayPathLabel(label, home)` so the popover
+ * shows compact labels like `~/scratch` or `…/Repos/cool` instead of
+ * the full absolute path. `kind: 'project'` items are unchanged (git
+ * repo basenames are already compact). Default `home = ''` means
+ * `displayPathLabel` skips the `~` step, but it still applies the
+ * `…/last2` truncation for long paths.
+ *
  * @param {{git?: Array, nonGit?: Array} | null | undefined} groups
  *   Project groups from `projectDisplayGroups`.
  * @param {string | null | undefined} currentFilter Current `state.projectFilter`.
+ * @param {string} [home=''] Home directory used for `~`-abbreviation on
+ *   `kind: 'path'` labels.
  * @returns {Array<object>} Items ready for DOM rendering.
  */
-export function buildPickerItems(groups, currentFilter) {
+export function buildPickerItems(groups, currentFilter, home = '') {
   const filter = currentFilter == null ? '' : String(currentFilter);
   const git = (groups && Array.isArray(groups.git)) ? groups.git : [];
   const nonGit = (groups && Array.isArray(groups.nonGit)) ? groups.nonGit : [];
@@ -147,7 +169,7 @@ export function buildPickerItems(groups, currentFilter) {
       items.push({
         kind: 'path',
         value: g.project || g.displayPath,
-        label: g.label,
+        label: displayPathLabel(g.label, home),
         displayPath: g.displayPath,
         active: filter === g.project || filter === g.displayPath,
         count: g.count

@@ -1,6 +1,6 @@
 {
   "name": "ai-history",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,6 +15,12 @@
     "vite": "^7.3.5"
   },
   "changelog": {
+    "0.10.0": [
+      "Fixed: loadProjectLabels fired one `git rev-parse` per unique project path via an unbounded Promise.all, so users with more than 32 distinct project directories hit Muxy's `exec: too many concurrent commands (limit 32)` error and got an empty gitToplevelMap. Now batched in groups of 16.",
+      "Auto-sync Muxy project on panel mount: when the panel loads, the filter reflects Muxy's currently active project (`muxy.git.repoInfo().root`) even if no project-change event has fired yet. Runs ONCE per panel mount — gated by `state.initialSyncDone` — so clicking Refresh does not re-fire the sync and override a filter the user picked in the picker.",
+      "Picker button shows the abbreviated path when the filter is stale (e.g. the active Muxy project has no conversation history): the filter value is run through `displayPathLabel` so a long path like `/Users/x/Repos/muxy-extensions/scratch/cool` renders as `…/scratch/cool` rather than the misleading literal `All projects`. Null/empty groups still show `All projects` since there is no path to abbreviate.",
+      "PATHS section in the picker abbreviates long paths to `…/last2` (with `~` for `$HOME`): path items now go through `displayPathLabel(label, home)` so a path like `/Users/x/scratch` becomes `~/scratch` and `/Users/x/Repos/muxy-extensions/scratch/cool` becomes `…/scratch/cool`."
+    ],
     "0.9.1": [
       "Auto-follow (v0.9.0) was effectively undebuggable: the listener emitted diagnostic info via console.log, but Muxy's debugger does not surface console.log from the panel iframe, so the user could not tell whether the listener was running, whether the 6 candidate event names worked, or whether polling was needed.",
       "The listener now reports its state via the panel's status bar (visible without DevTools): 'Auto-follow: listening to <event>' on install, 'Auto-follow: muxy.events unavailable' when muxy.events.subscribe is missing, 'Auto-follow: no Muxy event worked, polling as fallback' when all candidates throw, and 'Filter synced: <basename>' every time the filter is applied.",

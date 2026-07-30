@@ -83,6 +83,72 @@ export function setupProjectChangeListener(deps) {
   return { subscribed, failed };
 }
 
+// Reads the active Muxy project root from `muxy.git.repoInfo().root`, with
+// full defensive coverage for every shape the Muxy host can return. Returns
+// the root string when present, or `''` for any of the failure modes below.
+//
+// Used by:
+//   - `getActiveMuxyProject(muxy)` (panel-mount sync) — needs the same root
+//     string that the polling fallback would extract, byte-identical, so the
+//     `root === state.projectFilter` dedup at the polling call site does not
+//     false-positive on a cosmetic string difference.
+//   - `startPollingFallback` (auto-follow listener) — uses the helper inside
+//     the per-tick callback. The try/catch wrapper around `muxy.git.repoInfo()`
+//     stays in the polling helper so transient errors don't kill polling.
+//
+// Returns `''` (NOT `null` or `undefined`) for:
+//   - `muxy` is undefined / null
+//   - `muxy.git` is undefined / null
+//   - `muxy.git.repoInfo` is not a function (or missing)
+//   - `muxy.git.repoInfo()` throws (callers should still call this from a
+//     try/catch if they need that defensive behavior — this helper itself
+//     does NOT swallow throws so the caller can distinguish "no project"
+//     from "Muxy is broken")
+//   - `repoInfo()` returns null / undefined / non-object
+//   - `info.root` is missing / null / non-string / empty string
+//
+// Empty-string normalization is intentional: it lets callers use
+// `if (!root)` as a single check, the same as they would for an absent
+// project, and matches the polling helper's pre-refactor contract.
+export function _readRepoRoot(muxy) {
+  if (!muxy || !muxy.git || typeof muxy.git.repoInfo !== 'function') {
+    return '';
+  }
+  const info = muxy.git.repoInfo();
+  if (!info || typeof info !== 'object') return '';
+  const root = info.root;
+  if (typeof root !== 'string' || root.length === 0) return '';
+  return root;
+}
+
+// Returns the active Muxy project root (from `muxy.git.repoInfo().root`) or
+// `''` when no project is active / Muxy is unavailable. The returned string
+// is byte-identical to what the polling fallback's tick would extract, so
+// the two helpers can be compared with `===` without false negatives.
+//
+// Used at panel mount to sync `state.projectFilter` to the active project
+// ONE TIME — gated by `state.initialSyncDone` so a Refresh click does not
+// re-fire the sync.
+//
+// Failure modes (all return `''`):
+//   - `muxy` is undefined / null
+//   - `muxy.git` is undefined / null
+//   - `muxy.git.repoInfo` is not a function
+//   - `muxy.git.repoInfo()` throws (caught here so the call site is safe
+//     even if the Muxy host is in a bad state)
+//   - payload is null / non-object
+//   - `info.root` is missing / null / non-string / empty
+//
+// Throws: never. The defensive try/catch keeps panel mount from crashing
+// if Muxy is unavailable.
+export function getActiveMuxyProject(muxy) {
+  try {
+    return _readRepoRoot(muxy);
+  } catch {
+    return '';
+  }
+}
+
 // Polling fallback for the project-change listener. When none of the Muxy
 // event-name candidates in PROJECT_CHANGE_CANDIDATES work (the user's Muxy
 // version uses a different event name), this helper watches
@@ -97,6 +163,15 @@ export function setupProjectChangeListener(deps) {
 //     otherwise see "root != lastActiveRoot" forever and fire every tick).
 //   - If the new root equals `state.projectFilter` → already in sync, skip.
 //   - Otherwise call `onFilterChange(newRoot)`.
+//
+// The root extraction is delegated to `_readRepoRoot(muxy)` so the polling
+// fallback and `getActiveMuxyProject(muxy)` return byte-identical strings
+// for the same Muxy state. The `try { ... } catch { return; }` wrapper
+// around `muxy.git.repoInfo()` stays in this helper — `_readRepoRoot` lets
+// the throw escape so mount-time callers (which never want to crash panel
+// boot) must wrap it in their own try/catch, but the polling tick is fine
+// swallowing it inline because the spec is "transient errors don't kill
+// polling".
 //
 // `setIntervalFn` and `intervalMs` are injectable for tests.
 //
@@ -117,16 +192,13 @@ export function startPollingFallback({
   let lastActiveRoot = null;  // baseline; first tick captures only
   let firstTick = true;        // skip fire on the very first tick
   const handle = setIntervalFn(() => {
-    let info;
+    let root;
     try {
-      info = muxy.git.repoInfo();
+      root = _readRepoRoot(muxy);
     } catch {
       return; // silent: transient errors don't kill polling (Reviewer m1)
     }
-    const root = info && typeof info === 'object' ? info.root : null;
-    if (typeof root !== 'string' || root.length === 0) {
-      return; // malformed payload: skip tick (Reviewer m2)
-    }
+    if (!root) return; // no project active, or malformed payload (Reviewer m2)
     if (firstTick) {
       // Pure baseline capture: record the current root and exit. Do NOT
       // fire onFilterChange even if root !== state.projectFilter — at

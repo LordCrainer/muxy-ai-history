@@ -58,6 +58,61 @@ export function displayProject(path) {
   return '…/' + parts.slice(-2).join('/');
 }
 
+/**
+ * Returns a human-friendly label for an absolute path, suitable for tight UI
+ * surfaces like a button or popover row.
+ *
+ * Algorithm:
+ *   1. Pass non-string / empty `path` through as `''` (no work).
+ *   2. `abbreviateHome(path, home)` first — replaces the `home` prefix with
+ *      `~` so the result reads as `~/Repos/cool` instead of `/Users/x/Repos/cool`.
+ *   3. Split the (abbreviated) path by `/`, drop empty parts.
+ *   4. If the segment count is `<= keepSegments + 1` (default: 3) → return
+ *      the abbreviated path as-is. So `/Users/x/scratch` stays
+ *      `/Users/x/scratch` or `~/scratch` depending on `home`.
+ *   5. Otherwise → return `'…/' + last <keepSegments> parts joined by '/'`.
+ *      This trims long nested paths (e.g. `/Users/x/Repos/ai-history/scratch/cool`
+ *      becomes `…/scratch/cool`).
+ *   6. Empty `home` skips the `~` step (abbreviateHome returns the path
+ *      unchanged) but the truncation still applies.
+ *
+ * Defaults: `keepSegments = 2` (matches the "last 2 segments" rendering used
+ * throughout the panel; bumping it would let the popover show deeper ancestry).
+ *
+ * Differs from `displayProject` in two ways:
+ *   - Applies the `~`-abbreviation step (which `displayProject` does not).
+ *   - Uses `keepSegments` as the configurable cutoff (default 2 in both,
+ *     but the truncation in this helper happens AFTER `~` substitution so
+ *     `~/foo` does not get truncated to `…/foo`).
+ *
+ * @see displayProject — sibling helper that does NOT apply `~`-abbreviation.
+ * @see abbreviateHome  — the `~` substitution primitive.
+ *
+ * @param {string} path  Absolute path to format. Non-strings and empty
+ *                       strings return `''`.
+ * @param {string} home  Home directory used for `~`-abbreviation. May be
+ *                       empty; in that case the `~` step is skipped.
+ * @param {number} [keepSegments=2] Number of trailing segments to keep when
+ *                       the path is longer than the cutoff.
+ * @returns {string} The display label (e.g. `~/Repos/cool`, `…/scratch/cool`,
+ *                  or `''` for non-string / empty input).
+ *
+ * @example
+ *   displayPathLabel('/Users/x/Repos/cool', '/Users/x')           // '~/Repos/cool'
+ *   displayPathLabel('/Users/x/scratch',     '/Users/x')           // '~/scratch'
+ *   displayPathLabel('/Users/x/Repos/a/b/c', '/Users/x')           // '…/b/c'
+ *   displayPathLabel('/Users/x/Repos/cool', '/Users/x', 3)         // '~/Repos/cool'
+ *   displayPathLabel('/Users/x/Repos/cool', '')                    // '…/Repos/cool'
+ *   displayPathLabel(null, '/Users/x')                              // ''
+ */
+export function displayPathLabel(path, home, keepSegments = 2) {
+  if (typeof path !== 'string' || path.length === 0) return '';
+  const abbreviated = abbreviateHome(path, home);
+  const parts = abbreviated.split('/').filter(Boolean);
+  if (parts.length <= keepSegments + 1) return abbreviated;
+  return '…/' + parts.slice(-keepSegments).join('/');
+}
+
 export function buildMarkdown(conv, messages) {
   const lines = [];
   const title = (conv.title || '(untitled)').replace(/\n/g, ' ').trim();

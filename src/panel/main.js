@@ -5,6 +5,7 @@ import {
   escapeSqlString,
   slugify,
   displayProject,
+  displayPathLabel,
   buildMarkdown,
   buildRenameSql,
   applyCustomTitle,
@@ -35,7 +36,8 @@ import {
 import { openInTerminal as openInTerminalImpl, isProjectActive } from './open-in-terminal.js';
 import {
   setupProjectChangeListener as setupProjectChangeListenerImpl,
-  startPollingFallback
+  startPollingFallback,
+  getActiveMuxyProject
 } from './project-change-listener.js';
 
 // HOME-relative paths are resolved at runtime via `getPaths()` (see below).
@@ -65,7 +67,15 @@ const state = {
   pickerOpen: false,
   pickerHighlight: 0,
   pickerQuery: '',
-  pickerItems: null
+  pickerItems: null,
+  // Mount-time flag: true after the first `loadConversations` has attempted
+  // to sync `state.projectFilter` to the active Muxy project. We only sync
+  // once because:
+  //   - the polling fallback (and event listener) already handle ongoing
+  //     Muxy → panel sync once they're running;
+  //   - re-firing the sync on every Refresh would override a filter the
+  //     user intentionally picked from the picker.
+  initialSyncDone: false
 };
 
 const els = {
@@ -307,7 +317,7 @@ function renderPickerList() {
     git: filtered.git.map((g) => ({ ...g, count: countConversationsForProject(g.toplevel || g.project) })),
     nonGit: filtered.nonGit.map((g) => ({ ...g, count: countConversationsForProject(g.project) }))
   };
-  const items = buildPickerItems(allGroups, state.projectFilter);
+  const items = buildPickerItems(allGroups, state.projectFilter, state.home);
   state.pickerItems = items;
   state.pickerHighlight = findActiveIndex(items, state.projectFilter);
   els.projectPickerList.innerHTML = items.map((item, i) => renderPickerItemHTML(item, i)).join('');
@@ -382,12 +392,21 @@ async function loadProjectLabels(force = false) {
     return; // cache is fresh
   }
   console.log(`[loadProjectLabels] scanning ${decodedPaths.size} path(s) (force=${force}, newPaths=${hasNewPaths})`);
-  const entries = await Promise.all(
-    Array.from(decodedPaths).map(async (path) => {
-      const top = await gitToplevel(path);
-      return [path, top];
-    })
-  );
+  // Muxy caps concurrent `exec` calls at 32; batch so a large project list
+  // (each path spawns a `git rev-parse` call) never exceeds that limit.
+  const GIT_TOPLEVEL_BATCH_SIZE = 16;
+  const pathList = Array.from(decodedPaths);
+  const entries = [];
+  for (let i = 0; i < pathList.length; i += GIT_TOPLEVEL_BATCH_SIZE) {
+    const batch = pathList.slice(i, i + GIT_TOPLEVEL_BATCH_SIZE);
+    const batchEntries = await Promise.all(
+      batch.map(async (path) => {
+        const top = await gitToplevel(path);
+        return [path, top];
+      })
+    );
+    entries.push(...batchEntries);
+  }
   const map = {};
   for (const [path, top] of entries) {
     if (top) map[path] = top;
@@ -668,6 +687,20 @@ async function loadConversations() {
       ...claude.map((c) => ({ ...c, provider: 'claude' })),
       ...opencode.map((c) => ({ ...c, provider: 'opencode' }))
     ];
+    // Mount-time sync: if Muxy has an active project, point the panel filter
+    // at it ONCE. After this, the polling fallback / event listener handles
+    // ongoing Muxy → panel sync; re-firing on every Refresh would clobber a
+    // filter the user intentionally picked in the picker. Gated by
+    // `state.initialSyncDone` so the Refresh button (which re-runs
+    // `loadConversations`) does not re-trigger the sync.
+    if (!state.initialSyncDone) {
+      const initialRoot = getActiveMuxyProject(muxy);
+      if (initialRoot) {
+        state.projectFilter = initialRoot;
+        setStatus(`Filter synced: ${displayPathLabel(initialRoot, state.home)}`, 'ok');
+      }
+      state.initialSyncDone = true;
+    }
     await loadProjectLabels(true);
     const total = state.all.length;
     if (total === 0) {

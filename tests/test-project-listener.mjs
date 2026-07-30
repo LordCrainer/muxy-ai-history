@@ -15,7 +15,8 @@ import {
   PROJECT_CHANGE_CANDIDATES,
   extractPathFromProjectEvent,
   setupProjectChangeListener,
-  startPollingFallback
+  startPollingFallback,
+  getActiveMuxyProject
 } from '../src/panel/project-change-listener.js';
 
 let pass = 0;
@@ -522,6 +523,120 @@ console.log('\n4. startPollingFallback');
     check('stop(): clearInterval called with the interval handle',
       mocks.clearedHandles.length === 1 && mocks.clearedHandles[0] === 'interval-handle',
       `got ${mocks.clearedHandles.length} handle(s)`);
+  }
+}
+
+// ---- 5. getActiveMuxyProject ------------------------------------------------
+//
+// Used at panel mount to sync state.projectFilter to the active Muxy project.
+// The contract is: same Muxy state → same string as the polling fallback
+// extracts, so a `===` check against state.projectFilter works either way.
+//
+// All failure modes return '' (NOT null/undefined) so callers can use
+// `if (!root)` as a single check.
+
+console.log('\n5. getActiveMuxyProject');
+{
+  // 5.1 — muxy undefined
+  check('muxy undefined → ""', getActiveMuxyProject(undefined) === '');
+
+  // 5.2 — muxy.git undefined
+  check('muxy.git undefined → ""', getActiveMuxyProject({}) === '');
+
+  // 5.3 — muxy.git.repoInfo not a function
+  check('repoInfo not a function → ""', getActiveMuxyProject({ git: { repoInfo: 'nope' } }) === '');
+
+  // 5.4 — repoInfo() throws
+  check('repoInfo throws → ""', getActiveMuxyProject({
+    git: { repoInfo: () => { throw new Error('muxy broke'); } }
+  }) === '');
+
+  // 5.5 — repoInfo() returns null
+  check('repoInfo returns null → ""',
+    getActiveMuxyProject({ git: { repoInfo: () => null } }) === '');
+
+  // 5.6 — repoInfo() returns {}
+  check('repoInfo returns {} → ""',
+    getActiveMuxyProject({ git: { repoInfo: () => ({}) } }) === '');
+
+  // 5.7 — repoInfo() returns { root: null }
+  check('repoInfo returns {root:null} → ""',
+    getActiveMuxyProject({ git: { repoInfo: () => ({ root: null }) } }) === '');
+
+  // 5.8 — repoInfo() returns { root: '' }
+  check('repoInfo returns {root:""} → ""',
+    getActiveMuxyProject({ git: { repoInfo: () => ({ root: '' }) } }) === '');
+
+  // 5.9 — repoInfo() returns { root: '/x' }
+  check('repoInfo returns {root:"/x"} → "/x"',
+    getActiveMuxyProject({ git: { repoInfo: () => ({ root: '/x' }) } }) === '/x');
+
+  // 5.10 — REGRESSION GUARD: byte-identical to what startPollingFallback
+  // would extract on the first tick for the same muxy host. The polling
+  // tick captures the root via the same `_readRepoRoot` helper, so both
+  // paths must return the EXACT same string for the same muxy state —
+  // otherwise `root === state.projectFilter` dedup would false-positive
+  // on a cosmetic difference and break the auto-follow.
+  //
+  // Skips the throwing stub (covered by 5.4) since we cannot inspect its
+  // root without unwrapping the throw — getter-vs-polling equality is
+  // only meaningful when the stub actually returns a value.
+  {
+    const staticStubs = [
+      { git: { repoInfo: () => ({ root: '/Users/x/Repos/cool' }) } },
+      { git: { repoInfo: () => ({ root: '/Users/x/scratch' }) } },
+      { git: { repoInfo: () => ({}) } },
+      { git: { repoInfo: () => null } }
+    ];
+    let allEqual = true;
+    for (const muxy of staticStubs) {
+      const fromGetter = getActiveMuxyProject(muxy);
+      // Reconstruct the expected root the same way `_readRepoRoot` does:
+      // call repoInfo, take info.root, return '' for any non-string.
+      const info = muxy.git.repoInfo();
+      const expected = info && typeof info === 'object' && typeof info.root === 'string'
+        ? info.root
+        : '';
+      if (fromGetter !== expected) {
+        allEqual = false;
+        break;
+      }
+    }
+    check('regression: getActiveMuxyProject returns the same string as _readRepoRoot',
+      allEqual, 'getter output diverged from _readRepoRoot extraction');
+  }
+
+  // 5.11 — REGRESSION GUARD #2: live concurrent check that the polling
+  // tick and the getter return the SAME string for the SAME muxy host,
+  // using the actual polling helper machinery. This is the stronger
+  // guarantee: the polling fallback's root extraction goes through the
+  // same `_readRepoRoot` helper, so the strings must be byte-identical.
+  {
+    let currentRoot = '/Users/x/Repos/cool';
+    const muxy = { git: { repoInfo: () => ({ root: currentRoot }) } };
+    const onFilterChangeCalls = [];
+    const setIntervalFn = (cb, ms) => { setIntervalFn.cb = cb; return 'h'; };
+    const state = { projectFilter: '' };
+    startPollingFallback({
+      muxy,
+      state,
+      onFilterChange: (p) => onFilterChangeCalls.push(p),
+      setIntervalFn
+    });
+    // First tick: baseline capture (no onFilterChange fired).
+    setIntervalFn.cb();
+    // Now change the root and tick again — this should fire onFilterChange
+    // with the NEW root.
+    currentRoot = '/Users/x/Repos/other';
+    setIntervalFn.cb();
+    // And once more for an unrelated root.
+    currentRoot = '/Users/x/Repos/third';
+    setIntervalFn.cb();
+    check('regression: polling tick fires with the same string getActiveMuxyProject returns',
+      onFilterChangeCalls.length === 2
+        && onFilterChangeCalls[0] === getActiveMuxyProject({ git: { repoInfo: () => ({ root: '/Users/x/Repos/other' }) } })
+        && onFilterChangeCalls[1] === getActiveMuxyProject({ git: { repoInfo: () => ({ root: '/Users/x/Repos/third' }) } }),
+      `pollingCalls=${JSON.stringify(onFilterChangeCalls)}`);
   }
 }
 

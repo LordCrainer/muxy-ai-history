@@ -20,7 +20,7 @@ AI History reads the on-disk session stores of Claude Code and OpenCode and expo
 - Cmd/Ctrl+Click opens the message detail view
 - 3-dot menu on each card: **View**, **Copy path**, **Export** (Copy / Save as Markdown), **Rename**
 - Clickable breadcrumb in the detail view — clicking any segment filters the list to that subpath
-- When you change the active project in Muxy (from the sidebar, topbar, or command palette), the panel filter follows automatically and the picker button reflects the new project. If the user is reading a conversation in detail view, the detail is preserved — only the list re-renders. The picker and breadcrumb clicks filter the local view only; they do not change Muxy's active project. Status bar messages (visible without DevTools) report the listener state: 'Auto-follow: listening to <event>' on install, 'Auto-follow: no Muxy event worked, polling as fallback' when polling takes over, and 'Filter synced: <basename>' on each change. If polling is active, it watches \`muxy.git.repoInfo().root\` on a 3-second interval.
+- When you change the active project in Muxy (from the sidebar, topbar, or command palette), the panel filter follows automatically and the picker button reflects the new project. If the user is reading a conversation in detail view, the detail is preserved — only the list re-renders. The picker and breadcrumb clicks filter the local view only; they do not change Muxy's active project. **Mount-time sync:** when the panel loads, the filter reflects Muxy's currently active project (via `muxy.git.repoInfo().root`) even if no project-change event has fired yet — the sync runs ONCE per mount, so Refresh does not clobber a filter the user picked in the picker. Status bar messages (visible without DevTools) report the listener state: 'Auto-follow: listening to <event>' on install, 'Auto-follow: no Muxy event worked, polling as fallback' when polling takes over, and 'Filter synced: <basename>' on each change. If polling is active, it watches \`muxy.git.repoInfo().root\` on a 3-second interval.
 
 ### Modify
 - Rename a session inline; writes through to the source (SQL for OpenCode, sidecar JSON for Claude Code)
@@ -97,6 +97,8 @@ The same flow is used whether the trigger is the primary click on a card or the 
 
 The project filter is a popover anchored to a button in the list header. It groups projects into **Projects** (git repos, deduped by toplevel) and **Paths** (non-git absolute paths), and shows a session count next to each entry. The search field is case-insensitive and matches against label, display path, and toplevel. The list is keyboard-navigable: `↑/↓` move the highlight, `Enter` selects, `Esc` closes, and headers are skipped during navigation. `Cmd+P` / `Ctrl+P` toggles the popover from anywhere — the panel does not need focus.
 
+**Stale-filter label.** When the filter points to a project with no conversation history (e.g. Muxy's active project has no Claude Code or OpenCode sessions yet), the picker button shows the abbreviated path — `…/last2` segments, or `~/foo` when under `$HOME` — instead of the literal "All projects". This makes it clear the panel is still scoped, just to a project without matches. `null`/empty groups still show `All projects` since there is no path to abbreviate.
+
 ## Path abbreviation
 
 Paths under `$HOME` are rendered with a `~` prefix to reduce visual noise (for example, `/Users/x/Repos/ac` shows as `~/Repos/ac`); the absolute path is still present as a `title` attribute and surfaces as a native browser tooltip on hover. The two helpers `abbreviateHome` and `expandHome` in `src/panel/utils.js` are mirror functions: the first collapses `$HOME` prefixes, the second expands `~`, `~/`, and `$HOME` back to absolute paths. `expandHome` is also used internally to normalize OpenCode session directories before the smart routing logic runs, because some rows store the directory as `~/foo` rather than an absolute path.
@@ -158,7 +160,7 @@ bun install
 
 - `bun run dev` — Vite dev server on port 5173
 - `bun run build` — produces `dist/` (Vite bundle + manifest copy)
-- `bun run test` — runs all 5 test suites (664 tests)
+- `bun run test` — runs all 5 test suites (695 tests)
 - `bun run test:oit` — runs only the `open-in-terminal` suite
 - `bun run test:picker` — runs only the `project-picker` suite
 - `bun run test:listener` — runs only the `project-listener` suite
@@ -197,15 +199,15 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 
 ## Tests
 
-664 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+695 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 | Suite                              | Tests | What it covers                                                              |
 | ---------------------------------- | ----- | --------------------------------------------------------------------------- |
 | `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                                               |
 | `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer                                     |
 | `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic                                |
-| `tests/test-project-picker.mjs`    | 111   | The 5 pure helpers in `project-picker.js` + the simplified `selectProjectAndFilter` |
-| `tests/test-project-listener.mjs`  | 37    | The Muxy project-change listener + the polling fallback (in `project-change-listener.js`) |
+| `tests/test-project-picker.mjs`    | 131   | The 5 pure helpers in `project-picker.js` + `displayPathLabel` + the simplified `selectProjectAndFilter` |
+| `tests/test-project-listener.mjs`  | 48    | The Muxy project-change listener + the polling fallback + `getActiveMuxyProject` (in `project-change-listener.js`) |
 
 The routing tests use a programmable Muxy mock factory (`createMuxyMock()`) that records every API call and lets you inject responses per key, so no real Muxy host is required.
 

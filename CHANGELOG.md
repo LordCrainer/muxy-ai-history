@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-30
+
+### Fixed
+- **`loadProjectLabels` could exceed Muxy's concurrent-exec limit.** It fired one `git rev-parse` per unique decoded project path via an unbounded `Promise.all`, so users with more than 32 distinct project directories hit `exec: too many concurrent commands (limit 32)` and every `git rev-parse` in the batch failed, leaving `state.gitToplevelMap` empty. Now batched in groups of 16 in `src/panel/main.js`.
+
+### Added
+- **Mount-time Muxy project sync.** When the panel loads, the filter now reflects Muxy's currently active project (`muxy.git.repoInfo().root`) even if no project-change event has fired yet. Previously the panel only synced the filter when a Muxy `project.changed` event (or one of the 5 other candidate event names) was received — until then, the picker button showed `All projects` even when Muxy had an active project. The sync runs ONCE per panel mount (gated by `state.initialSyncDone`); the Refresh button does not re-fire it. Implemented in `loadConversations` in `src/panel/main.js` and the new pure helper `getActiveMuxyProject(muxy)` in `src/panel/project-change-listener.js`.
+- **Stale-filter label on the picker button.** When the active Muxy project has no conversation history (the filter points to a project with no matches), the button now shows the abbreviated path (e.g. `…/scratch/cool` or `~/Repos/cool` when under `$HOME`) instead of the literal `All projects`. The previous behavior falsely implied "no filter is applied". The new behavior makes it clear that the panel is still scoped to a project — just one with no conversations yet. Implemented via the new pure helper `displayPathLabel(path, home, keepSegments=2)` in `src/panel/utils.js`.
+- **Path abbreviation in the popover's PATHS section.** Long paths under `$HOME` are now shown as `~/foo`; longer paths are truncated to `…/last2` segments (e.g. `/Users/x/Repos/muxy-extensions/scratch/cool` → `…/scratch/cool`). The `displayPath` (full path) is unchanged and remains available as a hover tooltip. Implemented by passing `state.home` as the third arg to `buildPickerItems` in `src/panel/main.js`.
+
+### Changed
+- `getPickerLabel` in `src/panel/project-picker.js`: the "stale filter" case (last `return 'All projects';`) now returns `displayPathLabel(filterValue, home)`. The `null groups` and `empty groups` cases still return `All projects` since there is no path to abbreviate.
+- `buildPickerItems` in `src/panel/project-picker.js`: added an optional `home = ''` parameter. `kind: 'path'` items now run their `label` through `displayPathLabel(label, home)` for compact popover labels. `kind: 'project'` items are unchanged (git repo basenames are already compact). `value`, `displayPath`, `active`, and `count` are unchanged so the picker behavior is preserved.
+- `startPollingFallback` in `src/panel/project-change-listener.js`: refactored to share a private `_readRepoRoot(muxy)` helper with `getActiveMuxyProject`. Both paths now return byte-identical strings for the same Muxy state, so the `root === state.projectFilter` dedup at the polling call site works regardless of which helper updated the filter.
+
 ## [0.9.1] - 2026-06-27
 
 ### Fixed

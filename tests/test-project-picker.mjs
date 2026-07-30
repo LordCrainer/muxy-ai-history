@@ -26,7 +26,8 @@ import {
 } from '../src/panel/project-picker.js';
 import {
   findBestProjectForPath,
-  pathInside
+  pathInside,
+  displayPathLabel
 } from '../src/panel/utils.js';
 import { isProjectActive } from '../src/panel/open-in-terminal.js';
 
@@ -158,9 +159,78 @@ console.log('1. filterGroups');
     r13.git.length === GROUPS.git.length && r13.nonGit.length === GROUPS.nonGit.length);
 }
 
-// ---- 2. getPickerLabel ------------------------------------------------------
+// ---- 2. displayPathLabel -----------------------------------------------------
+//
+// Pure helper that produces the compact label used by the picker button
+// (stale-filter case) and the popover's PATHS section. Combines the `~`
+// substitution from `abbreviateHome` with a `…/last2` truncation for long
+// paths.
 
-console.log('\n2. getPickerLabel');
+console.log('\n2. displayPathLabel');
+{
+  const HOME_2 = '/Users/x';
+
+  // 2.1 — empty path → ''
+  check('empty path → ""', displayPathLabel('', HOME_2) === '',
+    `got "${displayPathLabel('', HOME_2)}"`);
+
+  // 2.2 — 1 segment under home → unchanged (after `~` substitution)
+  //   /Users/x becomes `~` (handled by abbreviateHome), but with 1 segment
+  //   there is nothing to truncate, so the result is just `~`.
+  //   For a 1-segment-under-home path like `/Users/x`, abbreviateHome
+  //   returns `~`, parts=['~'] (length 1), <= 3, returns `~` as-is.
+  check('1 segment under home (`/Users/x`) → `~`',
+    displayPathLabel('/Users/x', HOME_2) === '~',
+    `got "${displayPathLabel('/Users/x', HOME_2)}"`);
+
+  // 2.3 — 2 segments under home → `~/seg` (still ≤ 3 parts, no truncation)
+  check('2 segments under home (`/Users/x/foo`) → `~/foo`',
+    displayPathLabel('/Users/x/foo', HOME_2) === '~/foo',
+    `got "${displayPathLabel('/Users/x/foo', HOME_2)}"`);
+
+  // 2.4 — 3 segments under home → unchanged (no truncation, since ≤ 3)
+  //   abbreviateHome gives `~/Repos/cool`, parts=['~','Repos','cool']
+  //   (length 3), 3 <= keepSegments+1 (3), no truncation → `~/Repos/cool`.
+  check('3 segments under home (`/Users/x/Repos/cool`) → `~/Repos/cool`',
+    displayPathLabel('/Users/x/Repos/cool', HOME_2) === '~/Repos/cool',
+    `got "${displayPathLabel('/Users/x/Repos/cool', HOME_2)}"`);
+
+  // 2.5 — 4 segments under home → truncated to `…/last2`
+  //   abbreviateHome gives `~/a/b/c`, parts=['~','a','b','c'] (length 4),
+  //   4 > 3, truncate → `…/b/c`.
+  check('4 segments under home (`/Users/x/a/b/c`) → `…/b/c`',
+    displayPathLabel('/Users/x/a/b/c', HOME_2) === '…/b/c',
+    `got "${displayPathLabel('/Users/x/a/b/c', HOME_2)}"`);
+
+  // 2.6 — not under home: 3 segments unchanged, 4+ truncated
+  //   With empty home, no `~` substitution. 3 segments stays as-is.
+  check('not under home, 3 segments → unchanged',
+    displayPathLabel('/opt/foo/bar', '') === '/opt/foo/bar',
+    `got "${displayPathLabel('/opt/foo/bar', '')}"`);
+  //   4+ segments truncated without `~`.
+  check('not under home, 4 segments → `…/last2` (no ~)',
+    displayPathLabel('/opt/a/b/c', '') === '…/b/c',
+    `got "${displayPathLabel('/opt/a/b/c', '')}"`);
+
+  // 2.7 — no home at all: same as 2.6 but with `home = undefined` to
+  //   cover the implicit `''` case (caller doesn't pass home at all).
+  check('home undefined, 4 segments → `…/last2` (no ~)',
+    displayPathLabel('/opt/a/b/c') === '…/b/c',
+    `got "${displayPathLabel('/opt/a/b/c')}"`);
+  check('home undefined, 3 segments → unchanged',
+    displayPathLabel('/opt/foo/bar') === '/opt/foo/bar',
+    `got "${displayPathLabel('/opt/foo/bar')}"`);
+
+  // 2.8 — non-string input → ''
+  check('null path → ""', displayPathLabel(null, HOME_2) === '');
+  check('undefined path → ""', displayPathLabel(undefined, HOME_2) === '');
+  check('number path → ""', displayPathLabel(42, HOME_2) === '');
+  check('object path → ""', displayPathLabel({}, HOME_2) === '');
+}
+
+// ---- 3. getPickerLabel ------------------------------------------------------
+
+console.log('\n3. getPickerLabel');
 {
   // Empty / null / undefined filter
   check('empty string filter → "All projects"', getPickerLabel('', GROUPS, HOME) === 'All projects');
@@ -188,9 +258,31 @@ console.log('\n2. getPickerLabel');
   const l4 = getPickerLabel('/tmp/scratch', GROUPS, '/Users/x');
   check('nonGit NOT under home → unchanged', l4 === '/tmp/scratch', `got "${l4}"`);
 
-  // Stale filter (not in any group)
-  const l5 = getPickerLabel('/nonexistent/path/never', GROUPS, HOME);
-  check('stale filter → "All projects"', l5 === 'All projects', `got "${l5}"`);
+  // Stale filter (not in any group) → abbreviated form via displayPathLabel.
+  // With home = '/Users/x' the path '/nonexistent/path/never' is NOT under
+  // home, so no `~` substitution. It has 3 segments, ≤ 3 (keepSegments+1),
+  // so no truncation either — the full path is returned as-is.
+  const l5 = getPickerLabel('/nonexistent/path/never', GROUPS, '/Users/x');
+  check('stale filter (not under home, 3 segs) → unchanged',
+    l5 === '/nonexistent/path/never', `got "${l5}"`);
+
+  // Stale filter that IS under home: gets `~` substitution but no truncation
+  // (3 segments after substitution, ≤ 3).
+  const l5b = getPickerLabel('/Users/x/scratch/never', GROUPS, '/Users/x');
+  check('stale filter (under home, 3 segments) → `~/scratch/never`',
+    l5b === '~/scratch/never', `got "${l5b}"`);
+
+  // Stale filter that IS under home AND long enough to truncate.
+  // abbreviateHome gives `~/a/b/c/d`, parts=['~','a','b','c','d'] (5 parts),
+  // 5 > 3, truncate → `…/c/d`.
+  const l5c = getPickerLabel('/Users/x/a/b/c/d', GROUPS, '/Users/x');
+  check('stale filter (under home, 5 segments) → `…/last2`',
+    l5c === '…/c/d', `got "${l5c}"`);
+
+  // Stale filter NOT under home, long enough to truncate.
+  const l5d = getPickerLabel('/opt/a/b/c/d', GROUPS, '/Users/x');
+  check('stale filter (not under home, 5 segments) → `…/last2` (no ~)',
+    l5d === '…/c/d', `got "${l5d}"`);
 
   // null groups with non-empty filter
   const l6 = getPickerLabel('/foo', null, HOME);
@@ -201,9 +293,9 @@ console.log('\n2. getPickerLabel');
   check('empty groups → "All projects"', l7 === 'All projects');
 }
 
-// ---- 3. buildPickerItems ----------------------------------------------------
+// ---- 4. buildPickerItems ----------------------------------------------------
 
-console.log('\n3. buildPickerItems');
+console.log('\n4. buildPickerItems');
 {
   // Both groups non-empty → all + 2 headers + N+M items
   const items1 = buildPickerItems(GROUPS, '');
@@ -289,16 +381,78 @@ console.log('\n3. buildPickerItems');
   check('git item: displayPath preserved', projItem && projItem.displayPath === '/Users/x/Repos/muxy-extensions');
   check('git item: count preserved', projItem && projItem.count === 5);
 
-  // Non-git item exposes value === project
+  // Non-git item exposes value === project. With the new `home` arg defaulted
+  // to '' (no `home` passed), `displayPathLabel('/Users/x/scratch', '')` keeps
+  // the path unchanged: 3 segments, ≤ 3 → no truncation, no `~` (home is '').
   const items12 = buildPickerItems(GROUPS, '');
   const pathItem = items12.find((i) => i.kind === 'path');
   check('path item: value === project', pathItem && pathItem.value === '/Users/x/scratch');
-  check('path item: label === full path', pathItem && pathItem.label === '/Users/x/scratch');
+  check('path item: label === full path (no home, ≤ 3 segs, no truncation)',
+    pathItem && pathItem.label === '/Users/x/scratch');
+
+  // home abbreviation on path items. With home='/Users/x', '/Users/x/scratch'
+  // becomes '~/scratch' (3 segments, ≤ 3, no truncation).
+  const items13 = buildPickerItems(GROUPS, '', '/Users/x');
+  const pathItem13 = items13.find((i) => i.kind === 'path');
+  check('path item: home abbreviation → ~/scratch (3 segs under home)',
+    pathItem13 && pathItem13.label === '~/scratch',
+    `got "${pathItem13 && pathItem13.label}"`);
+
+  // Under-home long path: 4 segments → truncated to `…/last2`.
+  //   abbreviateHome('/Users/x/a/b/c', '/Users/x') = '~/a/b/c'
+  //   parts = ['~','a','b','c'] (length 4) > 3 → '…/b/c'.
+  const LONG_GROUPS = {
+    git: [],
+    nonGit: [
+      {
+        project: '/Users/x/a/b/c',
+        label: '/Users/x/a/b/c',
+        isGit: false,
+        toplevel: null,
+        displayPath: '/Users/x/a/b/c',
+        count: 1
+      }
+    ]
+  };
+  const items14 = buildPickerItems(LONG_GROUPS, '', '/Users/x');
+  const longPath = items14.find((i) => i.kind === 'path');
+  check('path item: under-home long path → `…/last2` truncation',
+    longPath && longPath.label === '…/b/c',
+    `got "${longPath && longPath.label}"`);
+
+  // Not-under-home long path: 4 segments → truncated without `~`.
+  const FAR_GROUPS = {
+    git: [],
+    nonGit: [
+      {
+        project: '/opt/a/b/c',
+        label: '/opt/a/b/c',
+        isGit: false,
+        toplevel: null,
+        displayPath: '/opt/a/b/c',
+        count: 1
+      }
+    ]
+  };
+  const items15 = buildPickerItems(FAR_GROUPS, '', '/Users/x');
+  const farPath = items15.find((i) => i.kind === 'path');
+  check('path item: not-under-home long path → `…/last2` (no ~)',
+    farPath && farPath.label === '…/b/c',
+    `got "${farPath && farPath.label}"`);
+
+  // No home passed at all: long path → truncated without `~` (default
+  // home='' → abbreviateHome returns path unchanged → parts length 4
+  // → '…/b/c').
+  const items16 = buildPickerItems(FAR_GROUPS, '');
+  const noHomePath = items16.find((i) => i.kind === 'path');
+  check('path item: no-home long path → `…/last2` (no ~)',
+    noHomePath && noHomePath.label === '…/b/c',
+    `got "${noHomePath && noHomePath.label}"`);
 }
 
-// ---- 4. matchItem -----------------------------------------------------------
+// ---- 5. matchItem -----------------------------------------------------------
 
-console.log('\n4. matchItem (keyboard navigation)');
+console.log('\n5. matchItem (keyboard navigation)');
 {
   // Build a simple items array: [all, project-header, project, project, path-header, path, path]
   const items = buildPickerItems(GROUPS, '');
@@ -372,9 +526,9 @@ console.log('\n4. matchItem (keyboard navigation)');
     matchItem(onlyAll, 'up', 0) === 0, `got ${matchItem(onlyAll, 'up', 0)}`);
 }
 
-// ---- 5. findActiveIndex -----------------------------------------------------
+// ---- 6. findActiveIndex -----------------------------------------------------
 
-console.log('\n5. findActiveIndex');
+console.log('\n6. findActiveIndex');
 {
   // Empty filter → "all" is active (index 0)
   const items1 = buildPickerItems(GROUPS, '');
@@ -425,7 +579,7 @@ console.log('\n5. findActiveIndex');
   check('empty array: returns -1', findActiveIndex([]) === -1);
 }
 
-// ---- 6. selectProjectAndFilter (simplified helper) -------------------------
+// ---- 7. selectProjectAndFilter (simplified helper) -------------------------
 //
 // The helper is now a thin orchestrator: switch to list view, set the
 // filter, re-render. No Muxy API calls (no list, no switchTo, no setStatus).
@@ -463,7 +617,7 @@ function createMuxySpy() {
   };
 }
 
-console.log('\n6. selectProjectAndFilter (simplified helper)');
+console.log('\n7. selectProjectAndFilter (simplified helper)');
 {
   // Build a fresh deps object for each test. `makeDeps` creates its own
   // DOM mocks with recording classLists so we can assert on DOM mutations.
