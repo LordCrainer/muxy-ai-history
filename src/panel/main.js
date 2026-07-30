@@ -37,7 +37,8 @@ import { openInTerminal as openInTerminalImpl, isProjectActive } from './open-in
 import {
   setupProjectChangeListener as setupProjectChangeListenerImpl,
   startPollingFallback,
-  getActiveMuxyProject
+  getActiveMuxyProject,
+  getActiveProjectPath
 } from './project-change-listener.js';
 
 // HOME-relative paths are resolved at runtime via `getPaths()` (see below).
@@ -47,6 +48,11 @@ import {
 // the host shell for `$HOME` via muxy.exec.
 const PAGE_SIZE = 50;
 const SIDECAR_KEY_PREFIX = (provider) => `${provider}:`;
+// Auto-follow polling interval: how often to re-check Muxy's active project
+// (via muxy.git.repoInfo() / muxy.projects.list()) when no change event has
+// fired. Lower = snappier auto-switch, at the cost of more frequent exec/API
+// calls while the panel is open.
+const POLL_INTERVAL_MS = 250;
 
 const state = {
   provider: 'all',
@@ -694,7 +700,15 @@ async function loadConversations() {
     // `state.initialSyncDone` so the Refresh button (which re-runs
     // `loadConversations`) does not re-trigger the sync.
     if (!state.initialSyncDone) {
-      const initialRoot = getActiveMuxyProject(muxy);
+      // `git.repoInfo()` only reports a root when the focused Muxy tab is
+      // itself a git-scoped terminal; it returns `{}` for any other focused
+      // tab (e.g. this extension panel) even when Muxy's own project
+      // switcher has an active project. Fall back to `projects.list()`'s
+      // `isActive` project in that case.
+      let initialRoot = getActiveMuxyProject(muxy);
+      if (!initialRoot) {
+        initialRoot = await getActiveProjectPath(muxy);
+      }
       if (initialRoot) {
         state.projectFilter = initialRoot;
         setStatus(`Filter synced: ${displayPathLabel(initialRoot, state.home)}`, 'ok');
@@ -1340,32 +1354,40 @@ function setupProjectChangeListener() {
   if (result.subscribed.length === 0) {
     if (!muxy || !muxy.events || typeof muxy.events.subscribe !== 'function') {
       console.warn('[ai-history] muxy.events.subscribe unavailable; project-change listener not installed');
-      setStatus('Auto-follow: muxy.events unavailable', 'warn');
+      setStatus('Auto-follow: muxy.events unavailable, polling as fallback', 'warn');
     } else {
       console.warn(
         '[ai-history] NO project-change event could be subscribed — listener is a no-op. ' +
         'Inspect Muxy docs for the correct event name and add it to the candidates list.'
       );
       setStatus('Auto-follow: no Muxy event worked, polling as fallback', 'warn');
-      // This message persists while polling is active. It is informational,
-      // not transient. The next filter sync will set its own status (which
-      // gets overwritten on the next sync) — but the warn message will be
-      // visible again the next time the panel mounts.
-      const poll = startPollingFallback({ muxy, state, onFilterChange: applyFilter });
-      if (poll.active) {
-        console.log('[ai-history] polling fallback started (3s interval, watching muxy.git.repoInfo)');
-      }
     }
   } else {
     console.log(`[ai-history] listener installed via event "${result.subscribed[0]}"`);
     for (let i = 1; i < result.subscribed.length; i += 1) {
       console.log(`[ai-history] skip extra event "${result.subscribed[i]}" (already subscribed)`);
     }
-    setStatus(`Auto-follow: listening to ${result.subscribed[0]}`, 'ok');
+    // `muxy.events.subscribe` does not validate the event name — it can
+    // report success for a candidate that is never actually emitted, so a
+    // "subscribed" result here is NOT proof the listener will ever fire.
+    // Polling (below) always runs alongside it as the reliable path; if the
+    // event *does* fire, `applyFilter`'s dedup against `state.projectFilter`
+    // makes the redundant polling tick a no-op.
+    setStatus(`Auto-follow: listening to ${result.subscribed[0]} (+ polling)`, 'ok');
+  }
+
+  // Always poll: `muxy.git.repoInfo()` / `muxy.projects.list()` are checked
+  // on POLL_INTERVAL_MS via `startPollingFallback`'s `isActive`-project
+  // fallback. This runs regardless of whether an event candidate above
+  // claims to be subscribed, because that claim is not reliable (see
+  // comment above).
+  const poll = startPollingFallback({ muxy, state, onFilterChange: applyFilter, intervalMs: POLL_INTERVAL_MS });
+  if (poll.active) {
+    console.log(`[ai-history] polling fallback started (${POLL_INTERVAL_MS}ms interval, watching muxy.git.repoInfo + muxy.projects.list)`);
+  } else {
+    console.warn('[ai-history] polling fallback did NOT start — muxy or muxy.git.repoInfo missing at setup time');
   }
 }
-
-setupProjectChangeListener();
 
 // Project picker: button toggles popover
 if (els.projectPicker) {
@@ -1459,4 +1481,12 @@ document.addEventListener('click', (e) => {
   selectProjectAndFilter(path);
 });
 
-loadConversations();
+// `setupProjectChangeListener` is deferred until after the first
+// `loadConversations()` resolves rather than called synchronously at script
+// load. Muxy injects the global `muxy` object asynchronously; a synchronous
+// call here could run before it exists, making `startPollingFallback`'s
+// `!muxy` guard bail with `{ active: false }` and silently never install the
+// interval — so the "auto-follow" polling would never actually run. By the
+// time `loadConversations()` resolves, `muxy` is confirmed available (its
+// own mount-time sync already reads `muxy.projects.list()` successfully).
+loadConversations().then(setupProjectChangeListener);

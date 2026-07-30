@@ -149,6 +149,30 @@ export function getActiveMuxyProject(muxy) {
   }
 }
 
+// Fallback source for the active project path: `muxy.git.repoInfo()` only
+// reports a root when the currently-focused Muxy tab is itself a git-scoped
+// terminal. It returns `{}` when the focused tab is something else (e.g. an
+// extension panel, or a non-terminal tab) even though Muxy's own project
+// switcher has an active project selected. `muxy.projects.list()` carries
+// that selection directly via each project's `isActive` boolean, so this is
+// used whenever `_readRepoRoot` comes back empty.
+//
+// Returns the active project's `path`, or `''` when unavailable (missing
+// API, non-array response, no project with `isActive === true`, or a
+// throw from `list()`).
+export async function getActiveProjectPath(muxy) {
+  if (!muxy || !muxy.projects || typeof muxy.projects.list !== 'function') return '';
+  try {
+    const projects = await muxy.projects.list();
+    if (!Array.isArray(projects)) return '';
+    const active = projects.find((p) => p && p.isActive === true);
+    if (!active || typeof active.path !== 'string' || active.path.length === 0) return '';
+    return active.path;
+  } catch {
+    return '';
+  }
+}
+
 // Polling fallback for the project-change listener. When none of the Muxy
 // event-name candidates in PROJECT_CHANGE_CANDIDATES work (the user's Muxy
 // version uses a different event name), this helper watches
@@ -191,14 +215,11 @@ export function startPollingFallback({
   }
   let lastActiveRoot = null;  // baseline; first tick captures only
   let firstTick = true;        // skip fire on the very first tick
-  const handle = setIntervalFn(() => {
-    let root;
-    try {
-      root = _readRepoRoot(muxy);
-    } catch {
-      return; // silent: transient errors don't kill polling (Reviewer m1)
-    }
-    if (!root) return; // no project active, or malformed payload (Reviewer m2)
+  // Shared by both root sources (repoInfo and the projects.list() fallback)
+  // so "last known active path" and the dedup/baseline logic stay unified
+  // regardless of which one produced the value.
+  const applyRoot = (root) => {
+    if (!root) return;
     if (firstTick) {
       // Pure baseline capture: record the current root and exit. Do NOT
       // fire onFilterChange even if root !== state.projectFilter — at
@@ -215,6 +236,26 @@ export function startPollingFallback({
       onFilterChange(root);
     } catch {
       // silent: a buggy render in onFilterChange must not kill polling (Reviewer m3)
+    }
+  };
+  const handle = setIntervalFn(() => {
+    let root;
+    try {
+      root = _readRepoRoot(muxy);
+    } catch {
+      return; // silent: transient errors don't kill polling (Reviewer m1)
+    }
+    if (root) {
+      applyRoot(root);
+      return;
+    }
+    // repoInfo yielded nothing (no project active, malformed payload, or —
+    // most commonly — the focused tab isn't a git-scoped terminal even
+    // though Muxy's project switcher has an active project). Fall back to
+    // `muxy.projects.list()`'s `isActive` project. Only attempted when the
+    // API is present so hosts/tests without `muxy.projects` are unaffected.
+    if (typeof muxy?.projects?.list === 'function') {
+      getActiveProjectPath(muxy).then(applyRoot).catch(() => {});
     }
   }, intervalMs);
   return {
