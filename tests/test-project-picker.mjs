@@ -291,6 +291,20 @@ console.log('\n3. getPickerLabel');
   // Empty groups with non-empty filter
   const l7 = getPickerLabel('/foo', { git: [], nonGit: [] }, HOME);
   check('empty groups → "All projects"', l7 === 'All projects');
+
+  // Stale filter that IS a known worktree (no conversation history yet, so
+  // it's absent from `groups`, but present in gitToplevelMap/worktreeInfoMap)
+  // — regression for the bug where a fresh worktree always showed the raw
+  // truncated path instead of "project · branch".
+  const wtToplevelMap = { '/Users/x/Repos/wt-feature': '/Users/x/Repos/wt-feature' };
+  const wtInfoMap = { '/Users/x/Repos/wt-feature': { branch: 'feature-x', parentProject: '/Users/x/Repos/main-proj' } };
+  const l8 = getPickerLabel('/Users/x/Repos/wt-feature', GROUPS, HOME, wtToplevelMap, wtInfoMap);
+  check('stale filter that is a known worktree → "project · branch"', l8 === 'main-proj · feature-x', `got "${l8}"`);
+
+  // Same, but no worktreeInfoMap/gitToplevelMap entry at all → still falls
+  // back to the plain truncated path (backward compat, default {} params).
+  const l9 = getPickerLabel('/Users/x/Repos/wt-feature', GROUPS, HOME);
+  check('stale filter with no maps → plain truncated path (default params)', l9 === '…/Repos/wt-feature', `got "${l9}"`);
 }
 
 // ---- 4. buildPickerItems ----------------------------------------------------

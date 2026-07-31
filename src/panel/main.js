@@ -64,6 +64,12 @@ const state = {
   customTitles: {},
   gitToplevelMap: {},
   gitToplevelMapUpdated: 0,
+  // Maps a worktree's toplevel path to `{ branch, parentProject }` — only
+  // populated for LINKED worktrees (see `gitWorktreeInfo`), so a plain repo
+  // toplevel simply has no entry here. Used by `projectDisplayGroups` to
+  // label worktrees as "parent-project · branch" instead of the worktree
+  // directory's own (often arbitrary) basename.
+  worktreeInfoMap: {},
   currentDetail: null,
   menuTargetId: null,
   menuView: 'main',
@@ -284,9 +290,9 @@ function renderContent(text) {
 
 function refreshPickerButton() {
   if (!els.projectPicker) return;
-  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap);
+  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap, state.worktreeInfoMap);
   const home = state.home || '';
-  const label = getPickerLabel(state.projectFilter, groups, home);
+  const label = getPickerLabel(state.projectFilter, groups, home, state.gitToplevelMap, state.worktreeInfoMap);
   els.projectPicker.textContent = label;
   els.projectPicker.title = label;
 }
@@ -317,10 +323,11 @@ function closeProjectPicker() {
 
 function renderPickerList() {
   if (!els.projectPickerList) return;
-  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap);
+  const groups = projectDisplayGroups(uniqueProjects(state.all), state.gitToplevelMap, state.worktreeInfoMap);
   const filtered = filterGroups(groups, state.pickerQuery);
   const allGroups = {
     git: filtered.git.map((g) => ({ ...g, count: countConversationsForProject(g.toplevel || g.project) })),
+    worktrees: filtered.worktrees.map((g) => ({ ...g, count: countConversationsForProject(g.toplevel || g.project) })),
     nonGit: filtered.nonGit.map((g) => ({ ...g, count: countConversationsForProject(g.project) }))
   };
   const items = buildPickerItems(allGroups, state.projectFilter, state.home);
@@ -331,7 +338,7 @@ function renderPickerList() {
 
 function renderPickerItemHTML(item, i) {
   const activeClass = i === state.pickerHighlight ? ' active' : '';
-  if (item.kind === 'project-header' || item.kind === 'path-header') {
+  if (item.kind === 'project-header' || item.kind === 'worktree-header' || item.kind === 'path-header') {
     return `<div class="picker-section-header">${escapeHtml(item.label)}</div>`;
   }
   const check = item.active ? '<span class="picker-check">✓</span>' : '<span class="picker-check"></span>';
@@ -384,6 +391,38 @@ async function gitToplevel(path) {
   return t || null;
 }
 
+// Determines whether `toplevel` is a linked git worktree (as opposed to the
+// repo's main working tree) and, if so, resolves the branch checked out
+// there and the main repo's root path. Used to build labels like
+// "myapp · feature-x" instead of the worktree directory's arbitrary
+// basename (see `extractRepoLabel` in utils.js).
+//
+// `git rev-parse --git-common-dir` returns the shared `.git` directory for
+// both the main worktree and any linked ones. For the main worktree, that
+// dir's parent IS `toplevel`; for a linked worktree, it points at the main
+// repo's `.git`, so its parent is the main repo's root — different from
+// `toplevel`. That difference is the sole signal used here; no Muxy API
+// calls are involved, only `git`.
+async function gitWorktreeInfo(toplevel) {
+  const [commonRes, branchRes] = await Promise.all([
+    muxyExec('/usr/bin/git', ['-C', toplevel, 'rev-parse', '--git-common-dir'], { timeoutMs: 6e3 }),
+    muxyExec('/usr/bin/git', ['-C', toplevel, 'branch', '--show-current'], { timeoutMs: 6e3 })
+  ]);
+  const branch = branchRes.exitCode === 0 ? (branchRes.stdout || '').trim() : '';
+  let parentProject = null;
+  if (commonRes.exitCode === 0) {
+    let commonDir = (commonRes.stdout || '').trim();
+    if (commonDir && !commonDir.startsWith('/')) {
+      commonDir = `${toplevel}/${commonDir}`;
+    }
+    const match = commonDir.match(/^(.*)\/\.git$/);
+    if (match && match[1] && match[1] !== toplevel) {
+      parentProject = match[1];
+    }
+  }
+  return { branch, parentProject };
+}
+
 async function loadProjectLabels(force = false) {
   const projects = uniqueProjects(state.all);
   const decodedPaths = new Set();
@@ -420,6 +459,56 @@ async function loadProjectLabels(force = false) {
   state.gitToplevelMap = map;
   state.gitToplevelMapUpdated = Date.now();
   console.log(`[loadProjectLabels] found ${Object.keys(map).length} git repo(s) of ${decodedPaths.size} path(s)`);
+
+  // Worktree detection: one extra `git` round-trip (2 execs) per UNIQUE
+  // toplevel (not per decoded path — a repo with many sessions shares one
+  // toplevel). Batched the same way as the rev-parse pass above to stay
+  // under Muxy's concurrent-exec limit.
+  const uniqueToplevels = Array.from(new Set(Object.values(map)));
+  const worktreeEntries = [];
+  for (let i = 0; i < uniqueToplevels.length; i += GIT_TOPLEVEL_BATCH_SIZE) {
+    const batch = uniqueToplevels.slice(i, i + GIT_TOPLEVEL_BATCH_SIZE);
+    const batchEntries = await Promise.all(
+      batch.map(async (toplevel) => [toplevel, await gitWorktreeInfo(toplevel)])
+    );
+    worktreeEntries.push(...batchEntries);
+  }
+  const worktreeInfoMap = {};
+  for (const [toplevel, info] of worktreeEntries) {
+    if (info.parentProject) worktreeInfoMap[toplevel] = info;
+  }
+  state.worktreeInfoMap = worktreeInfoMap;
+}
+
+// `loadProjectLabels` only resolves `git rev-parse`/worktree info for paths
+// that already have Claude/OpenCode conversation history (it derives its
+// candidate list from `state.all`). A path the auto-follow sync just
+// switched to — e.g. a worktree with zero conversations so far — has no
+// entry in `state.gitToplevelMap`, so it renders as a "stale filter" raw
+// path instead of picking up the `project · branch` worktree label. This
+// resolves that ONE path on demand (same `gitToplevel` + `gitWorktreeInfo`
+// helpers used by the batch scan) and refreshes the picker button/popover
+// once done. No-op if `path` (or an ancestor of it) is already known.
+async function ensureToplevelKnown(path) {
+  if (!path) return;
+  let current = path;
+  while (current && current !== '/') {
+    if (state.gitToplevelMap[current]) return; // already covered
+    const parent = current.replace(/\/[^/]+$/, '');
+    if (parent === current) break;
+    current = parent;
+  }
+  const top = await gitToplevel(path);
+  if (!top) return;
+  state.gitToplevelMap = { ...state.gitToplevelMap, [path]: top };
+  if (!state.worktreeInfoMap[top]) {
+    const info = await gitWorktreeInfo(top);
+    if (info.parentProject) {
+      state.worktreeInfoMap = { ...state.worktreeInfoMap, [top]: info };
+    }
+  }
+  refreshPickerButton();
+  if (state.pickerOpen) renderPickerList();
 }
 
 function renderList() {
@@ -716,6 +805,10 @@ async function loadConversations() {
       state.initialSyncDone = true;
     }
     await loadProjectLabels(true);
+    // `loadProjectLabels` only scans paths with existing conversation
+    // history; the just-synced `state.projectFilter` (e.g. a worktree with
+    // no conversations yet) may not be among them, so resolve it directly.
+    if (state.projectFilter) await ensureToplevelKnown(state.projectFilter);
     const total = state.all.length;
     if (total === 0) {
       setStatus('No conversations found. Check that Claude Code or OpenCode are installed.', 'warn');
@@ -1341,6 +1434,10 @@ function setupProjectChangeListener() {
       // Normal path: switch to list view and apply the filter.
       selectProjectAndFilter(newPath);
     }
+    // Fire-and-forget: resolves the git toplevel/worktree info for newPath if
+    // it isn't already known (e.g. a worktree with no conversation history
+    // yet), then re-renders the picker button with the proper label.
+    ensureToplevelKnown(newPath);
   };
 
   const result = setupProjectChangeListenerImpl({ muxy, state, onFilterChange: applyFilter });

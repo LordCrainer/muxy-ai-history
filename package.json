@@ -21,6 +21,12 @@
       "Fixed: `setupProjectChangeListener()` ran synchronously at script load, before Muxy's `muxy` global was guaranteed to exist, so `startPollingFallback` could silently never install its interval. It's now deferred until after the first `loadConversations()` resolves.",
       "Fixed: polling only started when zero of the 6 guessed project-change event names subscribed successfully, but `muxy.events.subscribe` doesn't validate event names — a bogus 'subscribed' result permanently blocked the reliable polling path. Polling now always runs alongside any event subscription.",
       "Changed: auto-follow polling interval lowered from 3000ms to 250ms so project switches in Muxy are picked up faster.",
+      "Fixed: worktree auto-follow never worked because the manifest was missing the worktrees:read permission — muxy.worktrees.list() threw 'permission denied', silently caught, always falling back to the parent project's path. Added worktrees:read to muxy.permissions.",
+      "Fixed: a newly-active path with no conversation history yet (e.g. a fresh worktree) showed as a raw stale-filter path instead of the 'project · branch' label, since loadProjectLabels only resolves paths already seen in conversation history. Added ensureToplevelKnown(path), called from mount-time sync and applyFilter, to resolve it on demand.",
+      "Fixed: muxy.worktrees.list({project: id}) threw 'project not found [object Object]' on this Muxy build — the id must be passed positionally, list(id), not wrapped in an options object. getActiveProjectPath now tries the positional form first, falling back to the options-object and no-arg forms for other Muxy versions.",
+      "Fixed: a fresh worktree's 'project · branch' label still didn't render even after ensureToplevelKnown resolved it, because getPickerLabel's stale-filter fallback only checked conversation-derived groups and went straight to the raw path. It now also checks extractRepoLabel directly against gitToplevelMap/worktreeInfoMap first.",
+      "Auto-follow tracks git worktrees: when the active Muxy project is a linked worktree, getActiveProjectPath resolves to the worktree's own path (via muxy.worktrees.list()/muxy.git.worktrees() + isWorktreeActive) instead of the parent project's path.",
+      "Worktrees get their own WORKTREES section in the picker (between PROJECTS and PATHS) labeled 'project · branch', instead of being mixed into PROJECTS under their raw directory name. projectDisplayGroups now returns a third `worktrees` array split out of `git`; loadProjectLabels detects linked worktrees via git rev-parse --git-common-dir + git branch --show-current (batched).",
       "Auto-sync Muxy project on panel mount: when the panel loads, the filter reflects Muxy's currently active project (`muxy.git.repoInfo().root`) even if no project-change event has fired yet. Runs ONCE per panel mount — gated by `state.initialSyncDone` — so clicking Refresh does not re-fire the sync and override a filter the user picked in the picker.",
       "Picker button shows the abbreviated path when the filter is stale (e.g. the active Muxy project has no conversation history): the filter value is run through `displayPathLabel` so a long path like `/Users/x/Repos/muxy-extensions/scratch/cool` renders as `…/scratch/cool` rather than the misleading literal `All projects`. Null/empty groups still show `All projects` since there is no path to abbreviate.",
       "PATHS section in the picker abbreviates long paths to `…/last2` (with `~` for `$HOME`): path items now go through `displayPathLabel(label, home)` so a path like `/Users/x/scratch` becomes `~/scratch` and `/Users/x/Repos/muxy-extensions/scratch/cool` becomes `…/scratch/cool`."
@@ -66,6 +72,7 @@
       "git:read",
       "projects:read",
       "projects:write",
+      "worktrees:read",
       "commands:exec"
     ],
     "panels": [

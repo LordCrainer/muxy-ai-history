@@ -360,6 +360,27 @@ check('empty input', g2.git.length === 0 && g2.nonGit.length === 0);
 const g3 = utils.projectDisplayGroups(['/Users/foo/Bar'], {});
 check('all non-git when no map', g3.git.length === 0 && g3.nonGit.length === 1);
 
+// Test 27b: extractRepoLabel / projectDisplayGroups worktree labels
+console.log('\n24b. extractRepoLabel / projectDisplayGroups worktree labels');
+const wtGitMap = { '/Users/dev/Repos/ac-feature-x': '/Users/dev/Repos/ac-feature-x' };
+const wtInfoMap = { '/Users/dev/Repos/ac-feature-x': { branch: 'feature-x', parentProject: '/Users/dev/Repos/ac' } };
+const wr5 = utils.extractRepoLabel('/Users/dev/Repos/ac-feature-x', wtGitMap, wtInfoMap);
+check('worktree label is "parent · branch"', wr5.label === 'ac · feature-x', `got "${wr5.label}"`);
+check('worktree isGit true', wr5.isGit === true);
+check('worktree toplevel is its own path', wr5.toplevel === '/Users/dev/Repos/ac-feature-x');
+const wr6 = utils.extractRepoLabel('/Users/dev/Repos/ac-feature-x', wtGitMap, {
+  '/Users/dev/Repos/ac-feature-x': { branch: '', parentProject: '/Users/dev/Repos/ac' }
+});
+check('worktree with empty branch falls back to basename', wr6.label === 'ac · ac-feature-x', `got "${wr6.label}"`);
+const wr7 = utils.extractRepoLabel('/Users/dev/Repos/ac-feature-x', wtGitMap);
+check('no worktreeInfoMap arg → plain basename label (backward compat)', wr7.label === 'ac-feature-x');
+const g4 = utils.projectDisplayGroups(['/Users/dev/Repos/ac-feature-x'], wtGitMap, wtInfoMap);
+check('projectDisplayGroups routes worktrees into their own group, not git',
+  g4.git.length === 0 && g4.worktrees.length === 1 && g4.worktrees[0].label === 'ac · feature-x');
+const g5 = utils.projectDisplayGroups(['/Users/dev/Repos/ac-feature-x'], wtGitMap);
+check('projectDisplayGroups without worktreeInfoMap → treated as plain git project',
+  g5.git.length === 1 && g5.worktrees.length === 0 && g5.git[0].label === 'ac-feature-x');
+
 // Test 28: source main.js has v0.3 features
 console.log('\n25. main.js v0.3 features');
 const mainSrc = readFileSync(join(extDir, 'src/panel/main.js'), 'utf-8') + '\n' + oitSrc;
@@ -839,18 +860,19 @@ console.log('\n53. v0.6.1 bundle has detailed logging');
 if (distAssetMatch) {
   const distJsV9 = readFileSync(join(extDir, 'dist/assets', distAssetMatch[1]), 'utf-8');
   check('bundle has [openInTerminal] tag', distJsV9.includes('[openInTerminal]'));
-  // Count olog() invocations with each step value. The minified letter
-  // changes across Vite versions, so we match a small class of plausible
-  // single letters: c (legacy), p (current olog), v (current owarn).
+  // Count olog() invocations with each step value. The minified single-letter
+  // name for olog/owarn shifts across builds as unrelated code is added
+  // elsewhere in the bundle (more variables competing for short names), so we
+  // match any single-letter identifier rather than a hardcoded allowlist.
   // Numeric steps
   const numSteps = [0, 1, 2, 3, 4, 5, 6, 7];
   for (const s of numSteps) {
-    const re = new RegExp(`\\b[cpv]\\(${s},`);
+    const re = new RegExp(`\\b[a-zA-Z]\\(${s},`);
     check(`bundle has olog(${s},...) call`, re.test(distJsV9));
   }
   // String steps
   for (const s of ['pre', '3b', '7b', 'fallback']) {
-    const re = new RegExp(`\\b[cpv]\\("${s}",`);
+    const re = new RegExp(`\\b[a-zA-Z]\\("${s}",`);
     check(`bundle has olog("${s}",...) call`, re.test(distJsV9));
   }
   check('bundle logs "first tab keys"', distJsV9.includes('first tab keys'));

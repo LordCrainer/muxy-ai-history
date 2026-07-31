@@ -273,7 +273,15 @@ export function decodeClaudeProject(project, home = '') {
 // If gitToplevelMap has a toplevel for the decoded path (or any parent
 // directory), returns the basename of the toplevel and isGit=true. Otherwise
 // returns the decoded full path and isGit=false.
-export function extractRepoLabel(project, gitToplevelMap = {}) {
+//
+// `worktreeInfoMap` (optional) maps a toplevel path to `{ branch, parentProject }`
+// (see `main.js`'s `gitWorktreeInfo`). When the toplevel is a linked git
+// worktree (`parentProject` is set), the label becomes
+// `<parent project name> · <branch>` (falling back to the worktree's own
+// basename if the branch is empty, e.g. detached HEAD) instead of just the
+// worktree directory's basename — which is often an arbitrary folder name
+// that doesn't indicate which project it belongs to.
+export function extractRepoLabel(project, gitToplevelMap = {}, worktreeInfoMap = {}) {
   const decoded = decodeClaudeProject(project);
   if (!decoded) return { label: '', isGit: false, toplevel: null, displayPath: '' };
   // Walk up the path looking for a toplevel match (handles subdirs of git repos
@@ -283,8 +291,16 @@ export function extractRepoLabel(project, gitToplevelMap = {}) {
     const toplevel = gitToplevelMap[current];
     if (toplevel) {
       const parts = toplevel.split('/').filter(Boolean);
+      const basename = parts.length > 0 ? parts[parts.length - 1] : toplevel;
+      const wtInfo = worktreeInfoMap[toplevel];
+      let label = basename;
+      if (wtInfo && wtInfo.parentProject) {
+        const parentParts = wtInfo.parentProject.split('/').filter(Boolean);
+        const parentName = parentParts.length > 0 ? parentParts[parentParts.length - 1] : wtInfo.parentProject;
+        label = `${parentName} · ${wtInfo.branch || basename}`;
+      }
       return {
-        label: parts.length > 0 ? parts[parts.length - 1] : toplevel,
+        label,
         isGit: true,
         toplevel,
         displayPath: decoded
@@ -304,20 +320,29 @@ export function buildResumeCommand(provider, id) {
   return null;
 }
 
-// Groups unique project strings into {git:[], nonGit:[]} with their labels.
-// Dedupes the git group by toplevel (Claude and OpenCode may both refer to the
-// same repo with different raw project values). The git entry's `value`
-// (== `project` field) is the toplevel so projectMatchesFilter can match
-// subpath sessions in the same repo.
-export function projectDisplayGroups(projects, gitToplevelMap = {}) {
+// Groups unique project strings into {git:[], worktrees:[], nonGit:[]} with
+// their labels. Dedupes the git/worktrees groups by toplevel (Claude and
+// OpenCode may both refer to the same repo with different raw project
+// values). Each entry's `value` (== `project` field) is the toplevel so
+// projectMatchesFilter can match subpath sessions in the same repo.
+//
+// Linked git worktrees (present in `worktreeInfoMap`) are split OUT of the
+// `git` group into their own `worktrees` group — they're still git repos
+// (their own `git rev-parse --show-toplevel` is themselves), but mixing them
+// into the main PROJECTS list is confusing since their label is
+// "parent-project · branch", not a project name.
+export function projectDisplayGroups(projects, gitToplevelMap = {}, worktreeInfoMap = {}) {
   const gitByToplevel = new Map();
+  const worktreeByToplevel = new Map();
   const nonGitByPath = new Map();
   for (const project of projects) {
-    const info = extractRepoLabel(project, gitToplevelMap);
+    const info = extractRepoLabel(project, gitToplevelMap, worktreeInfoMap);
     if (info.isGit) {
       const key = info.toplevel;
-      if (!gitByToplevel.has(key)) {
-        gitByToplevel.set(key, {
+      const isWorktree = Boolean(worktreeInfoMap[info.toplevel]);
+      const target = isWorktree ? worktreeByToplevel : gitByToplevel;
+      if (!target.has(key)) {
+        target.set(key, {
           project: info.toplevel,
           label: info.label,
           isGit: true,
@@ -339,8 +364,9 @@ export function projectDisplayGroups(projects, gitToplevelMap = {}) {
     }
   }
   const git = Array.from(gitByToplevel.values()).sort((a, b) => a.label.localeCompare(b.label));
+  const worktrees = Array.from(worktreeByToplevel.values()).sort((a, b) => a.label.localeCompare(b.label));
   const nonGit = Array.from(nonGitByPath.values()).sort((a, b) => a.label.localeCompare(b.label));
-  return { git, nonGit };
+  return { git, worktrees, nonGit };
 }
 
 // Splits a string into chunks of at most `size` characters.

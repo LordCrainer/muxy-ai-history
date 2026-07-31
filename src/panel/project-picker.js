@@ -9,15 +9,15 @@
 //   - matchItem(items, direction, start) — keyboard nav (arrow up/down)
 //   - findActiveIndex(items)            — initial keyboard highlight
 
-import { abbreviateHome, displayPathLabel } from './utils.js';
+import { abbreviateHome, displayPathLabel, extractRepoLabel } from './utils.js';
 
 // ----- Internal helpers ------------------------------------------------------
 
 // Returns true if `item` can receive keyboard highlight. Headers are
-// non-selectable separators; 'all' / 'project' / 'path' are.
+// non-selectable separators; 'all' / 'project' / 'worktree' / 'path' are.
 function isSelectableItem(item) {
   if (!item) return false;
-  return item.kind === 'all' || item.kind === 'project' || item.kind === 'path';
+  return item.kind === 'all' || item.kind === 'project' || item.kind === 'worktree' || item.kind === 'path';
 }
 
 // Returns true if any of `fields` on `item` contains `query` (case-insensitive).
@@ -34,31 +34,34 @@ function itemMatchesQuery(item, fields, q) {
 // ----- Public API ------------------------------------------------------------
 
 /**
- * Filters the {git, nonGit} project groups by a case-insensitive search query.
+ * Filters the {git, worktrees, nonGit} project groups by a case-insensitive
+ * search query.
  *
  * Matching fields:
- *   - Git items:    `label`, `displayPath`, `toplevel`
- *   - Non-git items: `label`, `displayPath`
+ *   - Git / worktree items: `label`, `displayPath`, `toplevel`
+ *   - Non-git items:        `label`, `displayPath`
  *
  * An empty or whitespace-only query returns ALL items. The returned
- * `git` and `nonGit` arrays are always NEW arrays (never the input
- * references) so callers can safely mutate them.
+ * `git`, `worktrees`, and `nonGit` arrays are always NEW arrays (never the
+ * input references) so callers can safely mutate them.
  *
- * @param {{git?: Array, nonGit?: Array} | null | undefined} groups
+ * @param {{git?: Array, worktrees?: Array, nonGit?: Array} | null | undefined} groups
  *   Grouped projects (shape produced by `projectDisplayGroups`).
  * @param {string | null | undefined} query Search string (may be empty).
- * @returns {{git: Array, nonGit: Array}} New groups containing the matches.
+ * @returns {{git: Array, worktrees: Array, nonGit: Array}} New groups containing the matches.
  */
 export function filterGroups(groups, query) {
-  if (!groups || typeof groups !== 'object') return { git: [], nonGit: [] };
+  if (!groups || typeof groups !== 'object') return { git: [], worktrees: [], nonGit: [] };
   const git = Array.isArray(groups.git) ? groups.git : [];
+  const worktrees = Array.isArray(groups.worktrees) ? groups.worktrees : [];
   const nonGit = Array.isArray(groups.nonGit) ? groups.nonGit : [];
   const q = (query == null ? '' : String(query)).trim().toLowerCase();
   if (!q) {
-    return { git: [...git], nonGit: [...nonGit] };
+    return { git: [...git], worktrees: [...worktrees], nonGit: [...nonGit] };
   }
   return {
     git: git.filter((g) => itemMatchesQuery(g, ['label', 'displayPath', 'toplevel'], q)),
+    worktrees: worktrees.filter((g) => itemMatchesQuery(g, ['label', 'displayPath', 'toplevel'], q)),
     nonGit: nonGit.filter((g) => itemMatchesQuery(g, ['label', 'displayPath'], q))
   };
 }
@@ -72,29 +75,41 @@ export function filterGroups(groups, query) {
  *   3. Filter matches a non-git group's `project` or `displayPath` → the group's
  *      `label` with `~`-abbreviation applied (so e.g. `/Users/x/scratch`
  *      becomes `~/scratch` when `home === '/Users/x'`).
- *   4. Otherwise (stale filter, e.g. Muxy's active project is set but has no
- *      conversation history) → the filter value formatted via
- *      `displayPathLabel` (e.g. `/Users/x/Repos/cool` → `…/Repos/cool` or
- *      `~/Repos/cool` when under `home`). This is a hint to the user that
- *      the filter is still applied but no items match it.
+ *   4. Otherwise (stale filter — e.g. Muxy's active project/worktree has no
+ *      conversation history yet, so it never made it into `groups`) →
+ *      `extractRepoLabel(filterValue, gitToplevelMap, worktreeInfoMap)` is
+ *      tried directly against the raw maps (not the conversation-derived
+ *      `groups`), so a fresh worktree still gets its "project · branch"
+ *      label. Falls back further to `displayPathLabel` (e.g.
+ *      `/Users/x/Repos/cool` → `…/Repos/cool` or `~/Repos/cool` under
+ *      `home`) only when the path isn't a known git toplevel at all — a
+ *      hint that the filter is still applied but nothing matches it.
  *
  * @param {string | null | undefined} filterValue Current `state.projectFilter`.
- * @param {{git?: Array, nonGit?: Array} | null | undefined} groups
- *   Current grouped projects.
+ * @param {{git?: Array, worktrees?: Array, nonGit?: Array} | null | undefined} groups
+ *   Current grouped projects (derived from paths with conversation history).
  * @param {string} home Home directory used for `~`-abbreviation.
+ * @param {Object} [gitToplevelMap={}] Full toplevel map (`state.gitToplevelMap`),
+ *   independent of conversation history — used for the stale-filter fallback.
+ * @param {Object} [worktreeInfoMap={}] Full worktree info map
+ *   (`state.worktreeInfoMap`) — used for the stale-filter fallback.
  * @returns {string} Picker button label.
  */
-export function getPickerLabel(filterValue, groups, home) {
+export function getPickerLabel(filterValue, groups, home, gitToplevelMap = {}, worktreeInfoMap = {}) {
   if (!filterValue) return 'All projects';
   if (!groups || typeof groups !== 'object') return 'All projects';
   const git = Array.isArray(groups.git) ? groups.git : [];
+  const worktrees = Array.isArray(groups.worktrees) ? groups.worktrees : [];
   const nonGit = Array.isArray(groups.nonGit) ? groups.nonGit : [];
   // Empty groups: there is no chance for the filter to match anything, so
   // show the generic "All projects" label rather than rendering the
   // filter as a stand-alone path (which would visually imply it's an
   // active, scoped filter when it can't match anything anyway).
-  if (git.length === 0 && nonGit.length === 0) return 'All projects';
+  if (git.length === 0 && worktrees.length === 0 && nonGit.length === 0) return 'All projects';
   for (const g of git) {
+    if (filterValue === g.toplevel || filterValue === g.project) return g.label;
+  }
+  for (const g of worktrees) {
     if (filterValue === g.toplevel || filterValue === g.project) return g.label;
   }
   for (const g of nonGit) {
@@ -102,28 +117,37 @@ export function getPickerLabel(filterValue, groups, home) {
       return abbreviateHome(g.label, home);
     }
   }
-  // Stale filter: keep the filter visible (so the user knows the panel
-  // is still scoped) but render a compact `…/last2` label rather than the
-  // literal "All projects" (which would falsely imply "no filter").
+  // Stale filter: the path (or an ancestor of it) may still be a known git
+  // toplevel/worktree even though it has no conversation history yet (so it
+  // never made it into `groups`). Check the raw maps directly before
+  // falling back to a plain truncated path.
+  const info = extractRepoLabel(filterValue, gitToplevelMap, worktreeInfoMap);
+  if (info.isGit) return info.label;
+  // Truly unknown path: keep the filter visible (so the user knows the
+  // panel is still scoped) but render a compact `…/last2` label rather than
+  // the literal "All projects" (which would falsely imply "no filter").
   return displayPathLabel(filterValue, home);
 }
 
 /**
  * Builds the flat list of items to render inside the popover, in display order:
  *
- *   [ all ] → [ projects header ] → [ project, project, ... ]
- *           → [ paths header ]    → [ path, path, ... ]
+ *   [ all ] → [ projects header ]  → [ project, project, ... ]
+ *           → [ worktrees header ] → [ worktree, worktree, ... ]
+ *           → [ paths header ]     → [ path, path, ... ]
  *
- * Headers are omitted when the corresponding group is empty. If BOTH groups
+ * Headers are omitted when the corresponding group is empty. If ALL groups
  * are empty, the returned array still contains the `all` item so the popover
  * is never totally empty.
  *
  * Item shapes:
- *   - { kind: 'all',           label, value: '',   active }
- *   - { kind: 'project-header', label }
- *   - { kind: 'project',       value, label, displayPath, active, count? }
+ *   - { kind: 'all',            label, value: '',   active }
+ *   - { kind: 'project-header',  label }
+ *   - { kind: 'project',        value, label, displayPath, active, count? }
+ *   - { kind: 'worktree-header', label }
+ *   - { kind: 'worktree',       value, label, displayPath, active, count? }
  *   - { kind: 'path-header',    label }
- *   - { kind: 'path',          value, label, displayPath, active, count? }
+ *   - { kind: 'path',           value, label, displayPath, active, count? }
  *
  * `active` is set on at most ONE item — the one the filter currently
  * matches (or the `all` item when the filter is empty). Stale filters
@@ -132,12 +156,13 @@ export function getPickerLabel(filterValue, groups, home) {
  * `home` is optional. When provided, `kind: 'path'` items have their
  * `label` run through `displayPathLabel(label, home)` so the popover
  * shows compact labels like `~/scratch` or `…/Repos/cool` instead of
- * the full absolute path. `kind: 'project'` items are unchanged (git
- * repo basenames are already compact). Default `home = ''` means
- * `displayPathLabel` skips the `~` step, but it still applies the
- * `…/last2` truncation for long paths.
+ * the full absolute path. `kind: 'project'` and `kind: 'worktree'` items
+ * are unchanged (git repo basenames, and the "project · branch" worktree
+ * label, are already compact). Default `home = ''` means `displayPathLabel`
+ * skips the `~` step, but it still applies the `…/last2` truncation for
+ * long paths.
  *
- * @param {{git?: Array, nonGit?: Array} | null | undefined} groups
+ * @param {{git?: Array, worktrees?: Array, nonGit?: Array} | null | undefined} groups
  *   Project groups from `projectDisplayGroups`.
  * @param {string | null | undefined} currentFilter Current `state.projectFilter`.
  * @param {string} [home=''] Home directory used for `~`-abbreviation on
@@ -147,6 +172,7 @@ export function getPickerLabel(filterValue, groups, home) {
 export function buildPickerItems(groups, currentFilter, home = '') {
   const filter = currentFilter == null ? '' : String(currentFilter);
   const git = (groups && Array.isArray(groups.git)) ? groups.git : [];
+  const worktrees = (groups && Array.isArray(groups.worktrees)) ? groups.worktrees : [];
   const nonGit = (groups && Array.isArray(groups.nonGit)) ? groups.nonGit : [];
   const items = [];
   items.push({ kind: 'all', label: 'All projects', value: '', active: filter === '' });
@@ -155,6 +181,19 @@ export function buildPickerItems(groups, currentFilter, home = '') {
     for (const g of git) {
       items.push({
         kind: 'project',
+        value: g.toplevel,
+        label: g.label,
+        displayPath: g.displayPath,
+        active: filter === g.toplevel || filter === g.project,
+        count: g.count
+      });
+    }
+  }
+  if (worktrees.length > 0) {
+    items.push({ kind: 'worktree-header', label: `WORKTREES (${worktrees.length})` });
+    for (const g of worktrees) {
+      items.push({
+        kind: 'worktree',
         value: g.toplevel,
         label: g.label,
         displayPath: g.displayPath,

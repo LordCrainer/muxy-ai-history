@@ -1,3 +1,5 @@
+import { isWorktreeActive } from './utils.js';
+
 // project-change-listener.js — Pure helpers for the Muxy project-change listener.
 //
 // Extracted from main.js so the listener's logic can be unit-tested without a
@@ -167,6 +169,38 @@ export async function getActiveProjectPath(muxy) {
     if (!Array.isArray(projects)) return '';
     const active = projects.find((p) => p && p.isActive === true);
     if (!active || typeof active.path !== 'string' || active.path.length === 0) return '';
+    // If the user has navigated into a worktree of this project, prefer its
+    // path over the main project path so the panel filter follows the
+    // worktree, not just the parent repo. `muxy.worktrees.list` is tried
+    // first, `muxy.git.worktrees` as a fallback — same lookup order used by
+    // the "Open in Terminal" flow (open-in-terminal.js) for this Muxy API.
+    const rawListFn = (muxy.worktrees && typeof muxy.worktrees.list === 'function')
+      ? muxy.worktrees.list.bind(muxy.worktrees)
+      : (muxy.git && typeof muxy.git.worktrees === 'function')
+        ? muxy.git.worktrees.bind(muxy.git)
+        : null;
+    if (!rawListFn) return active.path;
+    // The `id` must be passed POSITIONALLY — `{ project: id }` makes at
+    // least one real Muxy build throw "project not found [object Object]"
+    // (the whole options object gets stringified as the lookup key).
+    // Confirmed working: `rawListFn(active.id)`. The other two shapes are
+    // kept as fallbacks for other Muxy versions that might expect them.
+    const attempts = [
+      () => rawListFn(active.id),
+      () => rawListFn({ project: active.id }),
+      () => rawListFn()
+    ];
+    for (const call of attempts) {
+      try {
+        const worktrees = await call();
+        if (!Array.isArray(worktrees)) continue;
+        const activeWt = worktrees.find((w) => isWorktreeActive(w, active.path));
+        const wtPath = activeWt && (activeWt.path || activeWt.root || activeWt.directory);
+        return (typeof wtPath === 'string' && wtPath.length > 0) ? wtPath : active.path;
+      } catch {
+        // try the next call shape
+      }
+    }
     return active.path;
   } catch {
     return '';

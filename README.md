@@ -121,6 +121,7 @@ Paths under `$HOME` are rendered with a `~` prefix to reduce visual noise (for e
 | `tabs:read`, `tabs:write`        | Open or reuse terminal tabs                            |
 | `git:read`                       | Detect the active worktree (for `tabs.open`)           |
 | `projects:read`, `projects:write`| Switch to the project that owns the session            |
+| `worktrees:read`                 | Auto-follow tracks the active worktree, not just its parent project |
 | `commands:exec`                  | `cat`, `sqlite3`, `mkdir`, `printf`, `base64`, `pbcopy`, `git` |
 
 ## Manifest commands
@@ -160,7 +161,7 @@ bun install
 
 - `bun run dev` — Vite dev server on port 5173
 - `bun run build` — produces `dist/` (Vite bundle + manifest copy)
-- `bun run test` — runs all 5 test suites (695 tests)
+- `bun run test` — runs all 5 test suites (701 tests)
 - `bun run test:oit` — runs only the `open-in-terminal` suite
 - `bun run test:picker` — runs only the `project-picker` suite
 - `bun run test:listener` — runs only the `project-listener` suite
@@ -199,11 +200,11 @@ For deeper diagnosis of the "Open in Terminal" flow, enable verbose logging in M
 
 ## Tests
 
-695 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
+701 tests across 5 suites. Run with `npm test`. See [CHANGELOG.md](./CHANGELOG.md) for version history.
 
 | Suite                              | Tests | What it covers                                                              |
 | ---------------------------------- | ----- | --------------------------------------------------------------------------- |
-| `tests/test-parsers.mjs`           | 424   | Source and bundle smoke tests                                               |
+| `tests/test-parsers.mjs`           | 430   | Source and bundle smoke tests                                               |
 | `tests/test-chunked-write.mjs`     | 20    | Round-trip of the chunked base64 writer                                     |
 | `tests/test-open-in-terminal.mjs`  | 72    | 12 acceptance criteria for the routing logic                                |
 | `tests/test-project-picker.mjs`    | 131   | The 5 pure helpers in `project-picker.js` + `displayPathLabel` + the simplified `selectProjectAndFilter` |
